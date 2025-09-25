@@ -19,7 +19,6 @@ study_category = None
 next_room_num = 1
 JOIN_CHANNEL_NAME = "Join to Create"
 pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'channel': ctx.channel}
-focus_roles = {}  # Not used for persistence, just tracking
 
 def format_time(seconds):
     """Convert seconds to HH:MM format."""
@@ -145,7 +144,7 @@ async def on_voice_state_update(member, before, after):
         except discord.Forbidden:
             pass
 
-# Focus Mode Command
+# Focus Mode Command (Decoupled from Pomodoro)
 @bot.command(name='focus')
 async def focus(ctx):
     """Toggle Focus Mode role for reduced distractions."""
@@ -165,7 +164,7 @@ async def focus(ctx):
             )
             # Position low in hierarchy (after @everyone)
             await focus_role.edit(position=1)
-            await ctx.send("✅ Created 'Focus Mode' role! Configure channel permissions: Allow 'View Channel' only for study channels (e.g., #study-help, Study Rooms). Deny for distractions (e.g., #off-topic).")
+            await ctx.send("✅ Created 'Focus Mode' role! Follow the configuration guide below to set up channels.")
             print(f'Created Focus Mode role: {focus_role.id}')
         except discord.Forbidden:
             await ctx.send("❌ Bot lacks 'Manage Roles' permission to create Focus Mode role. Grant Admin or Manage Roles.")
@@ -183,13 +182,10 @@ async def focus(ctx):
     else:
         # Add role (enter focus)
         await user.add_roles(focus_role)
-        embed = discord.Embed(title="🎯 Focus Mode On", description="Distracting channels hidden. Only study channels visible.\nUse !focus to exit. VC time tracking active!", color=0x00ff00)
+        embed = discord.Embed(title="🎯 Focus Mode On", description="Distracting channels hidden. Only configured study channels visible.\nUse !focus to exit. VC time tracking active!", color=0x00ff00)
         # Check if in study room
         if user.voice and user.voice.channel and user.voice.channel.category == study_category:
             embed.add_field(name="💡 Tip", value="You're in a study room—perfect for focus! Time counting...", inline=False)
-        # Optional: Auto-start Pomodoro if none active
-        if user.id not in pomodoro_sessions:
-            await ctx.send("⏱️ Starting a Pomodoro session to boost your focus!", view=PomodoroView(user, ctx.channel))
         try:
             await user.send("🎯 Entered Focus Mode. Non-study channels are now hidden. Stay productive! (Configure server channels for best results.)")
         except discord.Forbidden:
@@ -219,56 +215,7 @@ async def trust(ctx, user: discord.Member):
     vc = ctx.author.voice.channel
     overwrite = discord.PermissionOverwrite(connect=True, speak=True)
     await vc.set_permissions(user, overwrite=overwrite)
-    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)!")
-
-@bot.command(name='invite')
-async def invite(ctx, user: discord.Member):
-    """Invite user with DM and Join button."""
-    if not await is_owner(ctx):
-        return
-    vc = ctx.author.voice.channel
-    
-    # Grant permissions
-    overwrite = discord.PermissionOverwrite(connect=True, speak=True)
-    await vc.set_permissions(user, overwrite=overwrite)
-    
-    # Send confirmation to owner
-    await ctx.send(f"✅ Invited {user.mention} to {vc.name}! They got a DM with a join button.")
-    
-    # Send DM to invited user with button
-    try:
-        embed = discord.Embed(
-            title="📚 Study Room Invite",
-            description=f"You've been invited to **{vc.name}** by {ctx.author.mention}!\nClick the button below to join.",
-            color=0x00ff00
-        )
-        embed.add_field(name="Room", value=vc.mention, inline=False)
-        view = InviteView(vc, user.id)
-        await user.send(embed=embed, view=view)
-    except discord.Forbidden:
-        await ctx.send(f"⚠️ Couldn't DM {user.mention} (DMs closed). They can now manually join {vc.mention}.")
-
-class InviteView(View):
-    def __init__(self, channel: discord.VoiceChannel, invited_user_id: int):
-        super().__init__(timeout=3600)  # 1 hour timeout
-        self.channel = channel
-        self.invited_user_id = invited_user_id
-
-    @discord.ui.button(label='Join Room', style=discord.ButtonStyle.green, emoji='🔊')
-    async def join_button(self, interaction: discord.Interaction, button: Button):
-        if interaction.user.id != self.invited_user_id:
-            await interaction.response.send_message("❌ This invite is not for you!", ephemeral=True)
-            return
-        
-        user = interaction.user
-        if user.voice and user.voice.channel:
-            try:
-                await user.move_to(self.channel)
-                await interaction.response.send_message(f"✅ Moved you to {self.channel.name}! Happy studying! 📚", ephemeral=True)
-            except discord.Forbidden:
-                await interaction.response.send_message(f"⚠️ Couldn't auto-move you. Manually join: {self.channel.mention}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"🔗 Join {self.channel.name}: {self.channel.mention}\n(Connect to voice first for auto-move next time.)", ephemeral=True)
+    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)! They can now manually join the room.")
 
 @bot.command(name='kick')
 async def kick(ctx, user: discord.Member):
@@ -286,7 +233,7 @@ async def lock(ctx):
     role = ctx.guild.default_role
     overwrite = discord.PermissionOverwrite(connect=False, speak=False)
     await vc.set_permissions(role, overwrite=overwrite)
-    await ctx.send(f"🔒 {vc.name} is now locked (@everyone denied; use !trust or !invite to allow users)!")
+    await ctx.send(f"🔒 {vc.name} is now locked (@everyone denied; use !trust @user to allow access)!")
 
 @bot.command(name='unlock')
 async def unlock(ctx):
@@ -313,7 +260,7 @@ async def delete_room(ctx):
     except:
         pass
 
-# Improved Pomodoro with Buttons (Fixed)
+# Improved Pomodoro with Buttons
 @bot.command(name='pomodoro')
 async def pomodoro(ctx):
     """Start an interactive Pomodoro session with buttons."""
@@ -388,7 +335,20 @@ class PomodoroView(View):
         if self.channel:
             embed = discord.Embed(title="🔔 Work Session Done!", description="Take a 5-min break. ☕", color=0x00ff00)
             await self.channel.send(embed=embed)
-
-import os
-TOKEN = os.getenv("DISCORD_TOKEN")  # Railway Variables me add karna hoga
-bot.run(TOKEN)
+        
+        # Break phase
+        await asyncio.sleep(5 * 60)
+        if self.channel:
+            embed = discord.Embed(title="✅ Pomodoro Complete!", description=f"{self.user.mention}, great job! Ready for another cycle? (VC time tracked.)", color=0x00ff00)
+            await self.channel.send(embed=embed)
+        
+        # Check if in study room for bonus note
+        if self.user.voice and self.user.voice.channel and self.user.voice.channel.category == study_category:
+            await self.channel.send("🎯 Bonus: You completed this in a study room—your time counts double toward focus! 📈")
+        
+        self.is_running = False
+        self.children[0].disabled = False  # Re-enable start
+        if self.channel:
+            await self.channel.send("🔄 Click Start for another cycle!", view=self)
+        
+        # Clean up
