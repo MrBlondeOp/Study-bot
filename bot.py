@@ -2,208 +2,344 @@ import discord
 from discord.ext import commands
 import asyncio
 import datetime
-import os  # For secret token
-from flask import Flask  # For keeping bot awake
-import threading  # To run bot + web together
+import time
+from discord.ui import Button, View
 
-# Simple web server to keep Replit awake
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is alive! 🚀"
-
-# Your bot code (unchanged except token)
+# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-leaderboard = {}
-rooms = {}
+# Storage
+study_time = {}  # user_id: total_seconds
+current_sessions = {}  # user_id: start_time (for VC time)
+rooms = {}  # channel_id: owner_id
 study_category = None
 next_room_num = 1
-JOIN_CHANNEL_NAME = "Join to Create"  # Change if your channel name is different (e.g., capitalized)
+JOIN_CHANNEL_NAME = "Join to Create"
+pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'channel': ctx.channel, 'cycles': int}
+focus_roles = {}  # user_id: role_id (for tracking, but role is server-managed)
+
+def format_time(seconds):
+    """Convert seconds to HH:MM format."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
 @bot.event
 async def on_ready():
     global study_category, next_room_num
     guild = bot.guilds[0]
-    print(f'Bot connected to guild: {guild.name} (ID: {guild.id})')
     
     study_category = discord.utils.get(guild.categories, name='Study Rooms')
     if study_category:
-        print(f'Found "Study Rooms" category: {study_category.id}')
-        existing_rooms = [ch for ch in study_category.voice_channels if ch.name.startswith('Study Room ')]
+        existing_rooms = [ch for ch in study_category.voice_channels if ch.name.startswith('Study Room ') and ch.name.split()[-1].isdigit()]
         if existing_rooms:
-            nums = [int(ch.name.split()[-1]) for ch in existing_rooms if ch.name.split()[-1].isdigit()]
-            next_room_num = max(nums) + 1 if nums else 1
-            print(f'Existing rooms found. Next room number: {next_room_num}')
+            nums = [int(ch.name.split()[-1]) for ch in existing_rooms]
+            next_room_num = max(nums) + 1
+            print(f'Next room number: {next_room_num}')
         else:
-            print('No existing study rooms. Starting from 1.')
+            next_room_num = 1
+            print('Starting from room 1.')
     else:
-        print('❌ WARNING: No "Study Rooms" category found! Create it exactly as "Study Rooms".')
+        print('❌ No "Study Rooms" category found!')
     
     join_channel = discord.utils.get(guild.voice_channels, name=JOIN_CHANNEL_NAME)
-    if join_channel:
-        print(f'Found "{JOIN_CHANNEL_NAME}" channel: {join_channel.id}')
-    else:
-        print(f'❌ WARNING: No "{JOIN_CHANNEL_NAME}" voice channel found!')
+    if not join_channel:
+        print(f'❌ No "{JOIN_CHANNEL_NAME}" channel found!')
     
-    print(f'{bot.user} has logged in! Ready for StudySphere.')
+    print(f'{bot.user} has logged in! Ready for StudySphere. Voice events active.')
 
-# All your other code (leaderboard, commands, events) – paste the rest here exactly as before
-# (checkin, leaderboard, on_voice_state_update, is_owner, invite, kick, lock, unlock, delete, pomodoro, on_command_error)
-
-@bot.command(name='checkin')
-async def checkin(ctx):
-    user_id = ctx.author.id
-    if user_id in leaderboard:
-        leaderboard[user_id] += 1
-    else:
-        leaderboard[user_id] = 1
-    await ctx.send(f'✅ {ctx.author.mention} checked in! You now have {leaderboard[user_id]} points.')
-
+# Leaderboard (Time-Based)
 @bot.command(name='leaderboard')
 async def leaderboard_cmd(ctx):
-    if not leaderboard:
-        await ctx.send('🏆 No points yet—start studying!')
+    if not study_time:
+        await ctx.send('🏆 No study time yet—start joining study rooms!')
         return
-    sorted_users = sorted(leaderboard.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title='🏆 StudySphere Leaderboard', color=0x00ff00)
-    for i, (user_id, points) in enumerate(sorted_users, 1):
+    
+    sorted_users = sorted(study_time.items(), key=lambda x: x[1], reverse=True)[:10]
+    embed = discord.Embed(title='🏆 StudySphere Leaderboard (Time)', color=0x00ff00)
+    for i, (user_id, secs) in enumerate(sorted_users, 1):
         user = bot.get_user(user_id)
         username = user.display_name if user else f'User {user_id}'
-        embed.add_field(name=f'{i}. {username}', value=f'{points} points', inline=False)
+        time_str = format_time(secs)
+        embed.add_field(name=f'{i}. {username}', value=time_str, inline=False)
     embed.timestamp = datetime.datetime.now()
     await ctx.send(embed=embed)
 
+# Voice Events (VC Time Tracking + Auto-Create)
 @bot.event
 async def on_voice_state_update(member, before, after):
     global next_room_num
     
-    before_name = before.channel.name if before.channel else "None"
-    after_name = after.channel.name if after.channel else "None"
-    print(f'Voice update: {member.display_name} - Before: {before_name} -> After: {after_name}')
+    if member == bot.user:
+        return
     
-    if after.channel and after.channel.name == JOIN_CHANNEL_NAME:
-        if before.channel is None or before.channel != after.channel:
-            guild = member.guild
-            if not study_category:
-                try:
-                    await member.send("❌ No 'Study Rooms' category found!")
-                except:
-                    pass
-                return
-            
-            channel_name = f"Study Room {next_room_num}"
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(connect=False, speak=False),
-                member: discord.PermissionOverwrite(connect=True, speak=True)
-            }
-            
+    # Track study time (only in study rooms)
+    is_study_room = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
+    
+    # On join to study room: Start timer
+    if after.channel and is_study_room(after.channel) and member.id not in current_sessions:
+        current_sessions[member.id] = time.time()
+    
+    # On leave from study room: Add time to total
+    if before.channel and is_study_room(before.channel) and member.id in current_sessions:
+        start_time = current_sessions.pop(member.id)
+        session_time = time.time() - start_time
+        if member.id in study_time:
+            study_time[member.id] += session_time
+        else:
+            study_time[member.id] = session_time
+    
+    # Auto-create on join to "Join to Create"
+    if after.channel and after.channel.name == JOIN_CHANNEL_NAME and (before.channel is None or before.channel != after.channel):
+        guild = member.guild
+        if not study_category:
             try:
-                new_vc = await study_category.create_voice_channel(channel_name, overwrites=overwrites)
-                rooms[new_vc.id] = member.id
-                next_room_num += 1
-                await member.move_to(new_vc)
+                await member.send("❌ No 'Study Rooms' category found! Ask an admin to create it.")
+            except:
+                pass
+            return
+        
+        channel_name = f"Study Room {next_room_num}"
+        # Default UNLOCKED
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(connect=True, speak=True),
+            member: discord.PermissionOverwrite(connect=True, speak=True, manage_channels=True)
+        }
+        
+        try:
+            new_vc = await study_category.create_voice_channel(channel_name, overwrites=overwrites)
+            rooms[new_vc.id] = member.id
+            next_room_num += 1
+            
+            await member.move_to(new_vc)
+            
+            dm_msg = (f"🔊 Created and moved you to your unlocked {channel_name}! Anyone can join by default.\n"
+                      f"• !lock - Lock to trusted only\n"
+                      f"• !trust @user - Grant access even if locked\n"
+                      f"• !kick @user - Remove access\n"
+                      f"• !unlock - Open to everyone\n"
+                      f"• !delete - Close the room\n"
+                      f"Time in rooms counts toward leaderboard. Use !pomodoro for focused sessions or !focus for mode. 📚")
+            try:
+                await member.send(dm_msg)
+            except discord.Forbidden:
+                pass
                 
-                dm_msg = (f"🔊 Created your private {channel_name}! Commands: !invite, !kick, !lock, !unlock, !delete")
-                try:
-                    await member.send(dm_msg)
-                except discord.Forbidden:
-                    pass
-                print(f'✅ Created and moved to {channel_name}')
-            except Exception as e:
-                print(f'❌ Error: {e}')
+        except discord.Forbidden:
+            fallback_msg = (f"🔊 Created your unlocked {channel_name}! Manually join it (permission issue).\n"
+                            f"Commands: !trust @user, !lock, etc. Time tracks automatically. 📚")
+            try:
+                await member.send(fallback_msg)
+            except discord.Forbidden:
+                pass
     
+    # Auto-delete empty rooms
     if before.channel and before.channel.category == study_category and len(before.channel.members) == 0:
         try:
             await before.channel.delete()
             if before.channel.id in rooms:
                 del rooms[before.channel.id]
-            print(f'✅ Deleted empty room {before.channel.name}')
-        except Exception as e:
-            print(f'❌ Delete error: {e}')
+        except discord.Forbidden:
+            pass
 
+# Focus Mode Command
+@bot.command(name='focus')
+async def focus(ctx):
+    """Toggle Focus Mode role for reduced distractions."""
+    guild = ctx.guild
+    user = ctx.author
+    
+    # Find or create Focus Mode role
+    focus_role = discord.utils.get(guild.roles, name='Focus Mode')
+    if not focus_role:
+        try:
+            focus_role = await guild.create_role(
+                name='Focus Mode',
+                color=discord.Color.green(),
+                permissions=discord.Permissions.none(),  # Minimal perms
+                mentionable=False,
+                hoist=False  # Don't separate in member list
+            )
+            # Position low in hierarchy (after @everyone)
+            await focus_role.edit(position=1)
+            await ctx.send("✅ Created 'Focus Mode' role! Configure channel permissions as per instructions.")
+            print(f'Created Focus Mode role: {focus_role.id}')
+        except discord.Forbidden:
+            await ctx.send("❌ Bot lacks 'Manage Roles' permission to create Focus Mode role. Grant Admin or Manage Roles.")
+            return
+    
+    # Toggle role
+    if focus_role in user.roles:
+        # Remove role (exit focus)
+        await user.remove_roles(focus_role)
+        embed = discord.Embed(title="🔓 Focus Mode Off", description="All channels visible again. Keep studying! 📚", color=0xff9900)
+        try:
+            await user.send("🔓 Exited Focus Mode. Full server access restored.")
+        except discord.Forbidden:
+            pass
+    else:
+        # Add role (enter focus)
+        await user.add_roles(focus_role)
+        embed = discord.Embed(title="🎯 Focus Mode On", description="Distracting channels hidden. Only study channels visible.\nUse !focus to exit. VC time tracking active!", color=0x00ff00)
+        # Check if in study room
+        if user.voice and user.voice.channel and user.voice.channel.category == study_category:
+            embed.add_field(name="💡 Tip", value="You're in a study room—perfect for focus! Time counting...", inline=False)
+        # Optional: Auto-start Pomodoro if none active
+        if user.id not in pomodoro_sessions:
+            await ctx.send("⏱️ Starting a Pomodoro session to boost your focus!", view=PomodoroView(user, ctx.channel))
+        try:
+            await user.send("🎯 Entered Focus Mode. Non-study channels are now hidden. Stay productive! (Configure server channels for best results.)")
+        except discord.Forbidden:
+            pass
+    
+    await ctx.send(embed=embed)
+
+# Owner Commands
 async def is_owner(ctx):
     if not ctx.author.voice:
         await ctx.send("❌ Join your study room first!")
         return False
     vc = ctx.author.voice.channel
     if vc.id not in rooms:
-        await ctx.send("❌ Not a study room!")
+        await ctx.send("❌ This isn't a study room (use 'Join to Create' to make one)!")
         return False
     if ctx.author.id != rooms[vc.id]:
-        await ctx.send("❌ Only owner can use this!")
+        await ctx.send("❌ Only the room owner can use this command!")
         return False
     return True
 
-@bot.command(name='invite')
-async def invite(ctx, user: discord.Member):
-    if not await is_owner(ctx): return
+@bot.command(name='trust')
+async def trust(ctx, user: discord.Member):
+    """Owner grants trusted access (overrides lock)."""
+    if not await is_owner(ctx):
+        return
     vc = ctx.author.voice.channel
     overwrite = discord.PermissionOverwrite(connect=True, speak=True)
     await vc.set_permissions(user, overwrite=overwrite)
-    await ctx.send(f"✅ Invited {user.mention}!")
+    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)!")
+
+@bot.command(name='invite')
+async def invite(ctx, user: discord.Member):
+    """Invite user with DM and Join button."""
+    if not await is_owner(ctx):
+        return
+    vc = ctx.author.voice.channel
+    
+    # Grant permissions
+    overwrite = discord.PermissionOverwrite(connect=True, speak=True)
+    await vc.set_permissions(user, overwrite=overwrite)
+    
+    # Send confirmation to owner
+    await ctx.send(f"✅ Invited {user.mention} to {vc.name}! Check your DM for the button.")
+    
+    # Send DM to invited user with button
+    try:
+        embed = discord.Embed(
+            title="📚 Study Room Invite",
+            description=f"You've been invited to **{vc.name}** by {ctx.author.mention}!\nClick the button below to join.",
+            color=0x00ff00
+        )
+        embed.add_field(name="Room", value=vc.mention, inline=False)
+        view = InviteView(vc, user.id)  # Custom view with button
+        await user.send(embed=embed, view=view)
+    except discord.Forbidden:
+        await ctx.send(f"⚠️ Couldn't DM {user.mention} (DMs closed). They can now manually join {vc.mention}.")
+
+class InviteView(View):
+    """Button view for joining invited room."""
+    def __init__(self, channel: discord.VoiceChannel, invited_user_id: int):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.channel = channel
+        self.invited_user_id = invited_user_id
+
+    @discord.ui.button(label='Join Room', style=discord.ButtonStyle.green, emoji='🔊')
+    async def join_button(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.invited_user_id:
+            await interaction.response.send_message("❌ This invite is not for you!", ephemeral=True)
+            return
+        
+        user = interaction.user
+        if user.voice and user.voice.channel:
+            try:
+                await user.move_to(self.channel)
+                await interaction.response.send_message(f"✅ Moved you to {self.channel.name}! Happy studying! 📚", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message(f"⚠️ Couldn't auto-move you. Manually join: {self.channel.mention}", ephemeral=True)
+        else:
+            # User not in voice—send link
+            await interaction.response.send_message(f"🔗 Join {self.channel.name}: {self.channel.mention}\n(Connect to voice first for auto-move next time.)", ephemeral=True)
 
 @bot.command(name='kick')
 async def kick(ctx, user: discord.Member):
-    if not await is_owner(ctx): return
+    if not await is_owner(ctx):
+        return
     vc = ctx.author.voice.channel
     await vc.set_permissions(user, overwrite=None)
-    await ctx.send(f"👢 Kicked {user.mention}!")
+    await ctx.send(f"👢 Kicked {user.mention} from {vc.name} (removed access).")
 
 @bot.command(name='lock')
 async def lock(ctx):
-    if not await is_owner(ctx): return
+    if not await is_owner(ctx):
+        return
     vc = ctx.author.voice.channel
     role = ctx.guild.default_role
     overwrite = discord.PermissionOverwrite(connect=False, speak=False)
     await vc.set_permissions(role, overwrite=overwrite)
-    await ctx.send("🔒 Locked!")
+    await ctx.send(f"🔒 {vc.name} is now locked (@everyone denied; use !trust or !invite to allow users)!")
 
 @bot.command(name='unlock')
 async def unlock(ctx):
-    if not await is_owner(ctx): return
+    if not await is_owner(ctx):
+        return
     vc = ctx.author.voice.channel
     role = ctx.guild.default_role
     overwrite = discord.PermissionOverwrite(connect=True, speak=True)
     await vc.set_permissions(role, overwrite=overwrite)
-    await ctx.send("🔓 Unlocked!")
+    await ctx.send(f"🔓 {vc.name} is now unlocked (everyone can join)!")
 
 @bot.command(name='delete')
 async def delete_room(ctx):
-    if not await is_owner(ctx): return
+    if not await is_owner(ctx):
+        return
     vc = ctx.author.voice.channel
+    owner_id = rooms[vc.id]
     await vc.delete()
     if vc.id in rooms:
         del rooms[vc.id]
+    try:
+        owner = ctx.guild.get_member(owner_id)
+        await owner.send(f"🗑️ Deleted {vc.name}. Thanks for studying!")
+    except:
+        pass
 
+# Improved Pomodoro with Buttons
 @bot.command(name='pomodoro')
 async def pomodoro(ctx):
+    """Start an interactive Pomodoro session with buttons."""
     user_id = ctx.author.id
-    await ctx.send(f'⏱️ Starting 25-min session!')
-    await asyncio.sleep(25 * 60)
-    if any(m.id == user_id for m in ctx.channel.members if hasattr(ctx, 'channel')):
-        await ctx.send('🔔 Break time! 5 min...')
-        await asyncio.sleep(5 * 60)
-        await ctx.send('✅ Pomodoro done! +5 points.')
-        if user_id in leaderboard:
-            leaderboard[user_id] += 5
-        else:
-            leaderboard[user_id] = 5
-    else:
-        await ctx.send('⏰ You left—no points.')
+    if user_id in pomodoro_sessions:
+        await ctx.send("❌ You already have an active Pomodoro! Use the buttons to control it.")
+        return
+    
+    embed = discord.Embed(
+        title="⏱️ Pomodoro Timer",
+        description=f"{ctx.author.mention}, ready to focus? Click **Start** for a 25-min work session + 5-min break.\nYour VC time tracks automatically! (Pairs great with !focus)",
+        color=0x0099ff
+    )
+    view = PomodoroView(ctx.author, ctx.channel)
+    await ctx.send(embed=embed, view=view)
 
-@bot.event
-async def on_command_error(ctx, error):
-    await ctx.send('❌ Error—use !help.')
-
-# Run bot in background + web server
-def run_bot():
-    bot.run(os.getenv('DISCORD_TOKEN'))  # Uses secret token
-
-if __name__ == '__main__':
-    threading.Thread(target=run_bot, daemon=True).start()
-    app.run(host='0.0.0.0', port=8080, debug=False)
+class PomodoroView(View):
+    def __init__(self, user: discord.Member, channel: discord.TextChannel):
+        super().__init__(timeout=None)  # Persistent until stopped
+        self.user = user
+        self.channel = channel
+        self.is_running = False
+        self.current_task = None
+        self.start_button = Button(label='Start', style=discord.ButtonStyle.green, emoji='▶️')  # Reference for disabling
+        self.add_item(self.start_button)
+        self.add_item(Button(label='Pause', style=discord.ButtonStyle.blurple, emoji='⏸️'))
+        self.add_item(Button(label='Stop', style
