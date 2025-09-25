@@ -389,3 +389,6 @@ class PomodoroView(View):
             embed = discord.Embed(title="🔔 Work Session Done!", description="Take a 5-min break. ☕", color=0x00ff00)
             await self.channel.send(embed=embed)
 
+import os
+TOKEN = os.getenv("DISCORD_TOKEN")  # Railway Variables me add karna hoga
+bot.run(TOKEN)
