@@ -387,4 +387,5 @@ class PomodoroView(View):
         await asyncio.sleep(25 * 60)
         if self.channel:
             embed = discord.Embed(title="🔔 Work Session Done!", description="Take a 5-min break. ☕", color=0x00ff00)
-            await self.channel.send(embed
+            await self.channel.send(embed=embed)
+
