@@ -18,8 +18,8 @@ rooms = {}  # channel_id: owner_id
 study_category = None
 next_room_num = 1
 JOIN_CHANNEL_NAME = "Join to Create"
-pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'channel': ctx.channel, 'cycles': int}
-focus_roles = {}  # user_id: role_id (for tracking, but role is server-managed)
+pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'channel': ctx.channel}
+focus_roles = {}  # Not used for persistence, just tracking
 
 def format_time(seconds):
     """Convert seconds to HH:MM format."""
@@ -165,7 +165,7 @@ async def focus(ctx):
             )
             # Position low in hierarchy (after @everyone)
             await focus_role.edit(position=1)
-            await ctx.send("✅ Created 'Focus Mode' role! Configure channel permissions as per instructions.")
+            await ctx.send("✅ Created 'Focus Mode' role! Configure channel permissions: Allow 'View Channel' only for study channels (e.g., #study-help, Study Rooms). Deny for distractions (e.g., #off-topic).")
             print(f'Created Focus Mode role: {focus_role.id}')
         except discord.Forbidden:
             await ctx.send("❌ Bot lacks 'Manage Roles' permission to create Focus Mode role. Grant Admin or Manage Roles.")
@@ -233,7 +233,7 @@ async def invite(ctx, user: discord.Member):
     await vc.set_permissions(user, overwrite=overwrite)
     
     # Send confirmation to owner
-    await ctx.send(f"✅ Invited {user.mention} to {vc.name}! Check your DM for the button.")
+    await ctx.send(f"✅ Invited {user.mention} to {vc.name}! They got a DM with a join button.")
     
     # Send DM to invited user with button
     try:
@@ -243,13 +243,12 @@ async def invite(ctx, user: discord.Member):
             color=0x00ff00
         )
         embed.add_field(name="Room", value=vc.mention, inline=False)
-        view = InviteView(vc, user.id)  # Custom view with button
+        view = InviteView(vc, user.id)
         await user.send(embed=embed, view=view)
     except discord.Forbidden:
         await ctx.send(f"⚠️ Couldn't DM {user.mention} (DMs closed). They can now manually join {vc.mention}.")
 
 class InviteView(View):
-    """Button view for joining invited room."""
     def __init__(self, channel: discord.VoiceChannel, invited_user_id: int):
         super().__init__(timeout=3600)  # 1 hour timeout
         self.channel = channel
@@ -269,7 +268,6 @@ class InviteView(View):
             except discord.Forbidden:
                 await interaction.response.send_message(f"⚠️ Couldn't auto-move you. Manually join: {self.channel.mention}", ephemeral=True)
         else:
-            # User not in voice—send link
             await interaction.response.send_message(f"🔗 Join {self.channel.name}: {self.channel.mention}\n(Connect to voice first for auto-move next time.)", ephemeral=True)
 
 @bot.command(name='kick')
@@ -315,7 +313,7 @@ async def delete_room(ctx):
     except:
         pass
 
-# Improved Pomodoro with Buttons
+# Improved Pomodoro with Buttons (Fixed)
 @bot.command(name='pomodoro')
 async def pomodoro(ctx):
     """Start an interactive Pomodoro session with buttons."""
@@ -339,7 +337,54 @@ class PomodoroView(View):
         self.channel = channel
         self.is_running = False
         self.current_task = None
-        self.start_button = Button(label='Start', style=discord.ButtonStyle.green, emoji='▶️')  # Reference for disabling
-        self.add_item(self.start_button)
-        self.add_item(Button(label='Pause', style=discord.ButtonStyle.blurple, emoji='⏸️'))
-        self.add_item(Button(label='Stop', style
+
+    @discord.ui.button(label='Start', style=discord.ButtonStyle.green, emoji='▶️')
+    async def start_callback(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ Only the session owner can control this!", ephemeral=True)
+            return
+        if self.is_running:
+            await interaction.response.send_message("❌ Already running! Use Pause/Stop.", ephemeral=True)
+            return
+        
+        self.is_running = True
+        button.disabled = True  # Disable start button
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("🚀 Starting 25-min work session! Focus up! 📚")
+        self.current_task = asyncio.create_task(self.run_pomodoro_cycle())
+
+    @discord.ui.button(label='Pause', style=discord.ButtonStyle.blurple, emoji='⏸️')
+    async def pause_callback(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.user or not self.is_running:
+            await interaction.response.send_message("❌ Not running or not yours!", ephemeral=True)
+            return
+        if self.current_task:
+            self.current_task.cancel()
+            self.is_running = False
+            self.children[0].disabled = False  # Re-enable start
+        await interaction.response.send_message("⏸️ Pomodoro paused. Click Start to resume.", ephemeral=True)
+        await interaction.edit_original_response(view=self)
+
+    @discord.ui.button(label='Stop', style=discord.ButtonStyle.red, emoji='⏹️')
+    async def stop_callback(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.user:
+            await interaction.response.send_message("❌ Only the session owner can stop this!", ephemeral=True)
+            return
+        if self.current_task:
+            self.current_task.cancel()
+            self.is_running = False
+        # Clean up session
+        if self.user.id in pomodoro_sessions:
+            del pomodoro_sessions[self.user.id]
+        await interaction.response.send_message("🛑 Pomodoro stopped. Great effort!", ephemeral=True)
+        self.stop()  # Disable view
+
+    async def run_pomodoro_cycle(self):
+        """Run one cycle: 25 min work + 5 min break."""
+        pomodoro_sessions[self.user.id] = {'task': self.current_task, 'phase': 'work', 'channel': self.channel}
+        
+        # Work phase
+        await asyncio.sleep(25 * 60)
+        if self.channel:
+            embed = discord.Embed(title="🔔 Work Session Done!", description="Take a 5-min break. ☕", color=0x00ff00)
+            await self.channel.send(embed
