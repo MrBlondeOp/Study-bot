@@ -350,5 +350,9 @@ class PomodoroView(View):
         self.children[0].disabled = False  # Re-enable start
         if self.channel:
             await self.channel.send("🔄 Click Start for another cycle!", view=self)
+
+import os
+bot.run(os.getenv("DISCORD_TOKEN"))
+
         
         # Clean up
