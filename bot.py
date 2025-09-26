@@ -312,3 +312,6 @@ async def is_owner(ctx):
 @bot.command(name='trust')
 async def trust(ctx, user: discord.Member):
     """Owner grants"""
+    
+import os
+bot.run(os.getenv("DISCORD_TOKEN"))
