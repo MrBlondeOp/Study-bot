@@ -333,5 +333,6 @@ async def pomodoro_timer(uid):
         while time.time() < et:
             if s['paused']:
                 await asyncio.sleep(1)
-                et += time.time()
+                et += time.time() - s['pause_time']
+                s['pause_time'] = time.time()
 bot.run(os.getenv("DISCORD_TOKEN"))
