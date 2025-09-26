@@ -3,6 +3,7 @@ from discord.ext import commands
 import asyncio
 import datetime
 import time
+import os
 from discord.ui import Button, View
 
 # Bot setup
@@ -111,7 +112,7 @@ async def on_ready():
     
     print(f'{bot.user} has logged in! Ready for StudySphere. Voice events active. Stats/Goals enabled.')
 
-# Leaderboard (Unchanged)
+# Leaderboard
 @bot.command(name='leaderboard')
 async def leaderboard_cmd(ctx):
     if not study_time:
@@ -128,7 +129,7 @@ async def leaderboard_cmd(ctx):
     embed.timestamp = datetime.datetime.now()
     await ctx.send(embed=embed)
 
-# Personal Stats Command
+# Personal Stats
 @bot.command(name='stats')
 async def stats(ctx):
     user_id = ctx.author.id
@@ -227,7 +228,7 @@ async def progress(ctx):
         embed.description = "✅ Goal achieved! Great job—set a new one tomorrow?"
     await ctx.send(embed=embed)
 
-# New: FocusView for Buttons in "focus mode"
+# FocusView for Buttons in "focus mode"
 class FocusView(View):
     def __init__(self):
         super().__init__(timeout=None)  # Persistent
@@ -289,73 +290,43 @@ class FocusView(View):
         else:
             await interaction.response.send_message("✅ Focus Mode already disabled!", ephemeral=True)
 
-# Voice Events (Enhanced for Stats/Goals + Focus Rooms)
-@bot.event
-async def on_voice_state_update(member, before, after):
-    global next_room_num, next_focus_room_num
-    
-    if member == bot.user:
+# Owner Commands Helper
+async def is_owner(ctx):
+    if not ctx.author.voice:
+        await ctx.send("❌ Join your study room first!")
+        return False
+    vc = ctx.author.voice.channel
+    if vc.category == study_category and vc.id in rooms:
+        if ctx.author.id != rooms[vc.id]:
+            await ctx.send("❌ Only the room owner can use this command!")
+            return False
+    elif vc.category == focus_category and vc.id in focus_rooms:
+        if ctx.author.id != focus_rooms[vc.id]:
+            await ctx.send("❌ Only the room owner can use this command!")
+            return False
+    else:
+        await ctx.send("❌ This isn't a study or focus room (use 'Join to Create' or 'Join Focused Study' to make one)!")
+        return False
+    return True
+
+@bot.command(name='trust')
+async def trust(ctx, user: discord.Member):
+    """Owner grants trusted access (overrides lock)."""
+    if not await is_owner(ctx):
         return
-    
-    # Track study time (study or focus rooms)
-    is_study_room = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
-    is_focus_room = lambda ch: ch and ch.category == focus_category and ch.name.startswith('Focus Room ')
-    
-    today = datetime.date.today()
-    user_id = member.id
-    
-    # On join to study/focus room: Start timer + init stats
-    if after.channel and (is_study_room(after.channel) or is_focus_room(after.channel)):
-        if user_id not in current_sessions:
-            current_sessions[user_id] = time.time()
-            # Init stats if needed
-            if user_id not in session_history:
-                session_history[user_id] = []
-            if user_id not in sessions_count:
-                sessions_count[user_id] = 0
-            if user_id not in last_session_date:
-                last_session_date[user_id] = today
-            if user_id not in current_streak:
-                current_streak[user_id] = 0
-    
-    # On leave from study/focus room: Add time + update stats/goals
-    if before.channel and (is_study_room(before.channel) or is_focus_room(before.channel)) and user_id in current_sessions:
-        start_time = current_sessions.pop(user_id)
-        session_duration = time.time() - start_time
-        
-        # Update total time
-        if user_id in study_time:
-            study_time[user_id] += session_duration
-        else:
-            study_time[user_id] = session_duration
-        
-        # Stats updates
-        sessions_count[user_id] += 1
-        session_history[user_id].append(session_duration)
-        if len(session_history[user_id]) > 10:
-            session_history[user_id].pop(0)
-        
-        last_session_date[user_id] = today
-        if user_id in current_streak and today == last_session_date.get(user_id, today) - datetime.timedelta(days=1):
-            current_streak[user_id] += 1
-        else:
-            current_streak[user_id] = 1
-        
-        # Update daily goal
-        if user_id in goals and goals[user_id]['date'] == today:
-            goals[user_id]['current'] += session_duration
-    
-    # Auto-create general study room on join to "Join to Create"
-    if after.channel and after.channel.name == JOIN_CHANNEL_NAME and (before.channel is None or before.channel != after.channel):
-        guild = member.guild
-        if not study_category:
-            try:
-                await member.send("❌ No 'Study Rooms' category found! Ask an admin to create it.")
-            except:
-               
+    vc = ctx.author.voice.channel
+    overwrite = discord.PermissionOverwrite(connect=True, speak=True)
+    await vc.set_permissions(user, overwrite=overwrite)
+    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)! They can now manually join the room.")
 
-import os
-bot.run(os.getenv("DISCORD_TOKEN"))
+@bot.command(name='kick')
+async def kick(ctx, user: discord.Member):
+    if not await is_owner(ctx):
+        return
+    vc = ctx.author.voice.channel
+    await vc.set_permissions(user, overwrite=None)
+    await ctx.send(f"👢 Kicked {user.mention} from {vc.name} (removed access).")
 
-        
-        # Clean up
+@bot.command(name='lock')
+async def lock(ctx):
+    if not await is_owner
