@@ -23,7 +23,7 @@ next_room_num = 1
 next_focus_room_num = 1
 JOIN_CHANNEL_NAME = "Join to Create"
 JOIN_FOCUS_CHANNEL_NAME = "Join Focused Study"
-pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'duration': int, 'channel': discord.TextChannel, 'message': discord.Message}
+pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'duration': int, 'channel': discord.TextChannel, 'message': discord.Message, 'paused': bool, 'pause_time': float}
 
 # New: Stats & Goals
 sessions_count = {}  # user_id: total_sessions
@@ -60,7 +60,7 @@ async def on_ready():
             next_room_num = 1
             print('Starting study rooms from 1.')
     else:
-        print('❌ No "Study Rooms" category found!')
+        print('❌ No "Study Rooms" category found! Create it manually.')
     
     # Focus Category Setup
     focus_category = discord.utils.get(guild.categories, name='Focus')
@@ -108,7 +108,7 @@ async def on_ready():
     # Check for general Join channel
     join_channel = discord.utils.get(guild.voice_channels, name=JOIN_CHANNEL_NAME)
     if not join_channel:
-        print(f'❌ No "{JOIN_CHANNEL_NAME}" channel found!')
+        print(f'❌ No "{JOIN_CHANNEL_NAME}" channel found! Create it manually.')
     
     print(f'{bot.user} has logged in! Ready for StudySphere. Voice events active. Stats/Goals enabled.')
 
@@ -298,3 +298,17 @@ async def is_owner(ctx):
     vc = ctx.author.voice.channel
     if vc.category == study_category and vc.id in rooms:
         if ctx.author.id != rooms[vc.id]:
+            await ctx.send("❌ Only the room owner can use this command!")
+            return False
+    elif vc.category == focus_category and vc.id in focus_rooms:
+        if ctx.author.id != focus_rooms[vc.id]:
+            await ctx.send("❌ Only the room owner can use this command!")
+            return False
+    else:
+        await ctx.send("❌ This isn't a study or focus room (use 'Join to Create' or 'Join Focused Study' to make one)!")
+        return False
+    return True
+
+@bot.command(name='trust')
+async def trust(ctx, user: discord.Member):
+    """Owner grants
