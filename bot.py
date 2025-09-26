@@ -25,7 +25,7 @@ JOIN_FOCUS_CHANNEL_NAME = "Join Focused Study"
 pomodoro_sessions = {}
 delete_timers = {}
 
-# Stats & Goals
+# Stats
 sessions_count = {}
 session_history = {}
 last_session_date = {}
@@ -55,48 +55,47 @@ async def on_ready():
         else:
             next_room_num = 1
     else:
-        print('❌ No "Study Rooms" category! Create manually.')
+        print('No Study Rooms category - create manually.')
     
     focus_category = discord.utils.get(guild.categories, name='Focus')
     if not focus_category:
         try:
             focus_category = await guild.create_category('Focus')
         except:
-            print('❌ No perms for Focus category.')
+            print('No perms for Focus.')
     
-    focus_text_channel = discord.utils.get(focus_category.text_channels, name='focus mode') if focus_category else None
-    if not focus_text_channel and focus_category:
+    focus_text = discord.utils.get(focus_category.text_channels, name='focus mode') if focus_category else None
+    if not focus_text and focus_category:
         try:
-            focus_text_channel = await focus_category.create_text_channel('focus mode')
+            focus_text = await focus_category.create_text_channel('focus mode')
         except:
-            print('❌ No perms for focus mode channel.')
+            print('No perms for focus mode.')
     
-    if focus_text_channel:
-        embed = discord.Embed(title="🎯 Focus Mode", description="Toggle to hide distractions. Setup perms manually.", color=0x00ff00)
+    if focus_text:
+        embed = discord.Embed(title="Focus Mode", description="Toggle to hide distractions.", color=0x00ff00)
         view = FocusView()
-        await focus_text_channel.send(embed=embed, view=view)
+        await focus_text.send(embed=embed, view=view)
     
-    join_focus_channel = discord.utils.get(focus_category.voice_channels, name=JOIN_FOCUS_CHANNEL_NAME) if focus_category else None
-    if not join_focus_channel and focus_category:
+    join_focus = discord.utils.get(focus_category.voice_channels, name=JOIN_FOCUS_CHANNEL_NAME) if focus_category else None
+    if not join_focus and focus_category:
         try:
             await focus_category.create_voice_channel(JOIN_FOCUS_CHANNEL_NAME, overwrites={guild.default_role: discord.PermissionOverwrite(connect=True)})
         except:
-            print('❌ No perms for Join Focused Study.')
+            print('No perms for Join Focused Study.')
     
     join_channel = discord.utils.get(guild.voice_channels, name=JOIN_CHANNEL_NAME)
     if not join_channel:
-        print(f'❌ No "{JOIN_CHANNEL_NAME}"! Create manually.')
+        print('No Join to Create - create manually.')
     
     print(f'{bot.user} ready!')
 
-# Commands (leaderboard, stats, goal, progress - unchanged from previous)
 @bot.command(name='leaderboard')
 async def leaderboard(ctx):
     if not study_time:
-        await ctx.send('No data yet!')
+        await ctx.send('No data!')
         return
     sorted_users = sorted(study_time.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title='🏆 Leaderboard', color=0x00ff00)
+    embed = discord.Embed(title='Leaderboard', color=0x00ff00)
     for i, (user_id, secs) in enumerate(sorted_users, 1):
         user = bot.get_user(user_id)
         username = user.display_name if user else f'User {user_id}'
@@ -107,7 +106,7 @@ async def leaderboard(ctx):
 async def stats(ctx):
     user_id = ctx.author.id
     if user_id not in study_time or study_time[user_id] == 0:
-        await ctx.send("No stats yet!")
+        await ctx.send("No stats!")
         return
     total = study_time[user_id]
     num = sessions_count.get(user_id, 0)
@@ -121,7 +120,7 @@ async def stats(ctx):
     else:
         streak = 1 if last != today else streak
     current_streak[user_id] = streak
-    embed = discord.Embed(title=f"📊 {ctx.author.display_name}'s Stats", color=0x0099ff)
+    embed = discord.Embed(title=f"{ctx.author.display_name}'s Stats", color=0x0099ff)
     embed.add_field(name="Total", value=format_time(total), inline=True)
     embed.add_field(name="Sessions", value=str(num), inline=True)
     embed.add_field(name="Avg", value=format_time(avg), inline=True)
@@ -141,22 +140,22 @@ async def goal(ctx, action=None, *, time_str=None):
             else:
                 target = int(time_str)
             goals[user_id] = {'target': target, 'current': 0, 'date': today}
-            await ctx.send(f"✅ Goal: {format_time(target)}")
+            await ctx.send(f"Goal: {format_time(target)}")
         except:
-            await ctx.send("❌ Invalid time!")
+            await ctx.send("Invalid time!")
         return
     if user_id not in goals:
-        await ctx.send("❌ No goal! Use !goal set <time>")
+        await ctx.send("No goal! Use !goal set <time>")
         return
     data = goals[user_id]
     if data['date'] != today:
         data['current'] = 0
     if action == 'clear':
         del goals[user_id]
-        await ctx.send("🗑️ Cleared!")
+        await ctx.send("Cleared!")
         return
     remaining = max(0, data['target'] - data['current'])
-    embed = discord.Embed(title="🎯 Goal", color=0x00ff00)
+    embed = discord.Embed(title="Goal", color=0x00ff00)
     embed.description = f"Target: {format_time(data['target'])}\nCurrent: {format_time(data['current'])}\nRemaining: {format_time(remaining)}"
     await ctx.send(embed=embed)
 
@@ -165,7 +164,7 @@ async def progress(ctx):
     user_id = ctx.author.id
     today = datetime.date.today()
     if user_id not in goals:
-        await ctx.send("❌ No goal!")
+        await ctx.send("No goal!")
         return
     data = goals[user_id]
     if data['date'] != today:
@@ -174,15 +173,14 @@ async def progress(ctx):
     bar = get_progress_bar(perc)
     remaining = max(0, data['target'] - data['current'])
     eta = format_time(remaining) if remaining > 0 else "Done!"
-    embed = discord.Embed(title="📈 Progress", color=0x0099ff)
+    embed = discord.Embed(title="Progress", color=0x0099ff)
     embed.add_field(name="Bar", value=f"{bar} {perc:.0f}%", inline=False)
     embed.add_field(name="Current/Target", value=f"{format_time(data['current'])} / {format_time(data['target'])}", inline=True)
     embed.add_field(name="Remaining", value=eta, inline=True)
     if perc >= 100:
-        embed.description = "✅ Achieved!"
+        embed.description = "Achieved!"
     await ctx.send(embed=embed)
 
-# FocusView
 class FocusView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -196,11 +194,11 @@ class FocusView(View):
             try:
                 role = await guild.create_role(name='Focus Mode', color=0x00ff00, permissions=discord.Permissions.none())
             except:
-                await interaction.response.send_message("❌ No perms!", ephemeral=True)
+                await interaction.response.send_message("No perms!", ephemeral=True)
                 return
         if role not in user.roles:
             await user.add_roles(role)
-            await interaction.response.send_message("🎯 Enabled!", ephemeral=True)
+            await interaction.response.send_message("Enabled!", ephemeral=True)
         else:
             await interaction.response.send_message("Already enabled!", ephemeral=True)
 
@@ -211,30 +209,28 @@ class FocusView(View):
         role = discord.utils.get(guild.roles, name='Focus Mode')
         if role and role in user.roles:
             await user.remove_roles(role)
-            await interaction.response.send_message("🔓 Disabled!", ephemeral=True)
+            await interaction.response.send_message("Disabled!", ephemeral=True)
         else:
             await interaction.response.send_message("Already disabled!", ephemeral=True)
 
-# Owner Helper
 async def is_owner(ctx):
     if not ctx.author.voice:
-        await ctx.send("❌ Join room!")
+        await ctx.send("Join room!")
         return False
     vc = ctx.author.voice.channel
     if vc.category == study_category and vc.id in rooms:
         if ctx.author.id != rooms[vc.id]:
-            await ctx.send("❌ Owner only!")
+            await ctx.send("Owner only!")
             return False
     elif vc.category == focus_category and vc.id in focus_rooms:
         if ctx.author.id != focus_rooms[vc.id]:
-            await ctx.send("❌ Owner only!")
+            await ctx.send("Owner only!")
             return False
     else:
-        await ctx.send("❌ Not in room!")
+        await ctx.send("Not in room!")
         return False
     return True
 
-# Owner Commands
 @bot.command(name='trust')
 async def trust(ctx, user: discord.Member):
     if not await is_owner(ctx):
@@ -242,7 +238,7 @@ async def trust(ctx, user: discord.Member):
     vc = ctx.author.voice.channel
     ow = discord.PermissionOverwrite(connect=True, speak=True)
     await vc.set_permissions(user, overwrite=ow)
-    await ctx.send(f"✅ {user.mention} trusted.")
+    await ctx.send(f"{user.mention} trusted.")
 
 @bot.command(name='kick')
 async def kick(ctx, user: discord.Member):
@@ -250,7 +246,7 @@ async def kick(ctx, user: discord.Member):
         return
     vc = ctx.author.voice.channel
     await vc.set_permissions(user, overwrite=None)
-    await ctx.send(f"👢 Kicked {user.mention}.")
+    await ctx.send(f"Kicked {user.mention}.")
 
 @bot.command(name='lock')
 async def lock(ctx):
@@ -258,8 +254,8 @@ async def lock(ctx):
         return
     vc = ctx.author.voice.channel
     ow = discord.PermissionOverwrite(connect=False)
-    await vc.set_permissions(guild.default_role, overwrite=ow)
-    await ctx.send("🔒 Locked!")
+    await vc.set_permissions(ctx.guild.default_role, overwrite=ow)
+    await ctx.send("Locked!")
 
 @bot.command(name='unlock')
 async def unlock(ctx):
@@ -267,8 +263,8 @@ async def unlock(ctx):
         return
     vc = ctx.author.voice.channel
     ow = discord.PermissionOverwrite(connect=True, speak=True)
-    await vc.set_permissions(guild.default_role, overwrite=ow)
-    await ctx.send("🔓 Unlocked!")
+    await vc.set_permissions(ctx.guild.default_role, overwrite=ow)
+    await ctx.send("Unlocked!")
 
 @bot.command(name='delete')
 async def delete_room(ctx):
@@ -282,9 +278,14 @@ async def delete_room(ctx):
     if vc.id in delete_timers:
         delete_timers[vc.id].cancel()
     await vc.delete()
-    await ctx.send("🗑️ Deleted room!")
+    await ctx.send("Room deleted!")
 
-# Pomodoro
+@bot.command(name='pomodoro')
+async def pomodoro(ctx):
+    embed = discord.Embed(title="Pomodoro Timer", description="25min work + 5min break cycles.", color=0x00ff00)
+    view = PomodoroView(ctx.author.id)
+    await ctx.send(embed=embed, view=view)
+
 class PomodoroView(View):
     def __init__(self, user_id):
         super().__init__(timeout=None)
@@ -302,7 +303,6 @@ class PomodoroView(View):
         task = asyncio.create_task(pomodoro_timer(self.user_id))
         pomodoro_sessions[self.user_id]['task'] = task
         button.disabled = True
-        button.style = discord.ButtonStyle.grey
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(f"{interaction.user.mention} 25min work started! ⏰")
 
@@ -312,7 +312,7 @@ class PomodoroView(View):
             return
         session = pomodoro_sessions.get(self.user_id)
         if not session or session['paused']:
-            await interaction.response.send_message("Not running or paused!", ephemeral=True)
+            await interaction.response.send_message("Not running!", ephemeral=True)
             return
         session['paused'] = True
         session['pause_time'] = time.time()
@@ -335,14 +335,86 @@ class PomodoroView(View):
 async def pomodoro_timer(user_id):
     session = pomodoro_sessions[user_id]
     channel = session['channel']
-    phase_time = session['duration']
-    while phase_time > 0:
-        if session['paused']:
+    while True:
+        phase = session['phase']
+        duration = session['duration']
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            if session['paused']:
+                await asyncio.sleep(1)
+                end_time += time.time() - session['pause_time']
+                session['pause_time'] = time.time()
+                continue
             await asyncio.sleep(1)
-            phase_time += time.time() - session['pause_time']
-            session['pause_time'] = time.time()
-            continue
-        await asyncio.sleep(
+        if phase == 'work':
+            await channel.send(f"{bot.get_user(user_id).mention} Work done! 5min break ☕")
+            session['phase'] = 'break'
+            session['duration'] = 5*60
+        else:
+            await channel.send(f"{bot.get_user(user_id).mention} Break over! 25min work ⏰")
+            session['phase'] = 'work'
+            session['duration'] = 25*60
+
+async def auto_delete(channel_id):
+    await asyncio.sleep(300)  # 5min
+    channel = bot.get_channel(channel_id)
+    if channel and len(channel.members) == 0:
+        if channel_id in rooms:
+            del rooms[channel_id]
+        elif channel_id in focus_rooms:
+            del focus_rooms[channel_id]
+        await channel.delete()
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    global next_room_num, next_focus_room_num
+    if member == bot.user:
+        return
+    
+    # Time tracking
+    is_study = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
+    is_focus = lambda ch: ch and ch.category == focus_category and ch.name.startswith('Focus Room ')
+    today = datetime.date.today()
+    user_id = member.id
+    
+    if after.channel and (is_study(after.channel) or is_focus(after.channel)):
+        if user_id not in current_sessions:
+            current_sessions[user_id] = time.time()
+            if user_id not in session_history:
+                session_history[user_id] = []
+            if user_id not in sessions_count:
+                sessions_count[user_id] = 0
+            if user_id not in last_session_date:
+                last_session_date[user_id] = today
+            if user_id not in current_streak:
+                current_streak[user_id] = 0
+    
+    if before.channel and (is_study(before.channel) or is_focus(before.channel)) and user_id in current_sessions:
+        start = current_sessions.pop(user_id)
+        duration = time.time() - start
+        study_time[user_id] = study_time.get(user_id, 0) + duration
+        sessions_count[user_id] += 1
+        session_history[user_id].append(duration)
+        if len(session_history[user_id]) > 10:
+            session_history[user_id].pop(0)
+        last_session_date[user_id] = today
+        if user_id in current_streak and today == last_session_date.get(user_id, today) - datetime.timedelta(days=1):
+            current_streak[user_id] += 1
+        else:
+            current_streak[user_id] = 1
+        if user_id in goals and goals[user_id]['date'] == today:
+            goals[user_id]['current'] += duration
+    
+    # Auto-create study room
+    if after.channel and after.channel.name == JOIN_CHANNEL_NAME and (before.channel is None or before.channel != after.channel):
+        if not study_category:
+            try:
+                await member.send("No Study Rooms category!")
+            except:
+                pass
+            return
+        room_name = f"Study Room {next_room_num}"
+        overwrites = {guild.default_role: discord
 
 import os
 bot.run(os.getenv("DISCORD_TOKEN"))
