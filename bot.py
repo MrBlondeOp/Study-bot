@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import asyncio
+import os
 import datetime
 import time
 from discord.ui import Button, View
@@ -351,6 +352,4 @@ class PomodoroView(View):
         if self.channel:
             await self.channel.send("🔄 Click Start for another cycle!", view=self)
         
-        # Clean up
-        import os
 bot.run(os.getenv("DISCORD_TOKEN"))
