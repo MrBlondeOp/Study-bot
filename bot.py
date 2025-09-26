@@ -341,7 +341,18 @@ async def on_voice_state_update(member, before, after):
         else:
             current_streak[user_id] = 1
         
-        # Update
+        # Update daily goal
+        if user_id in goals and goals[user_id]['date'] == today:
+            goals[user_id]['current'] += session_duration
+    
+    # Auto-create general study room on join to "Join to Create"
+    if after.channel and after.channel.name == JOIN_CHANNEL_NAME and (before.channel is None or before.channel != after.channel):
+        guild = member.guild
+        if not study_category:
+            try:
+                await member.send("❌ No 'Study Rooms' category found! Ask an admin to create it.")
+            except:
+               
 
 import os
 bot.run(os.getenv("DISCORD_TOKEN"))
