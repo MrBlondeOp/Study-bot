@@ -335,8 +335,6 @@ class FocusView(View):
             await i.response.send_message("Already disabled!", ephemeral=True)
 
 # ==================== Run Bot ====================
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    print("No token found!")
+import os
+bot.run(os.getenv("DISCORD_TOKEN"))
+
