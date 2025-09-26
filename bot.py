@@ -165,7 +165,183 @@ async def goal(ctx, action=None, *, time_str=None):
     user_id = ctx.author.id
     today = datetime.date.today()
     
-    if action == 'set' and ⬤
+    if action == 'set' and time_str:
+        try:
+            if 'h' in time_str.lower():
+                hours = float(time_str.lower().replace('h', ''))
+                target = int(hours * 3600)
+            elif 'm' in time_str.lower():
+                minutes = float(time_str.lower().replace('m', ''))
+                target = int(minutes * 60)
+            else:
+                target = int(time_str)  # Seconds
+            goals[user_id] = {'target': target, 'current': 0, 'date': today}
+            await ctx.send(f"✅ Daily goal set: {format_time(target)} (resets tomorrow). Use !progress to track!")
+        except ValueError:
+            await ctx.send("❌ Invalid time! Use e.g., !goal set 2h, 90m, or 3600 (seconds).")
+        return
+    
+    if user_id not in goals:
+        await ctx.send("❌ No goal set! Use !goal set <time> (e.g., 2h) to start.")
+        return
+    
+    goal_data = goals[user_id]
+    if goal_data['date'] != today:
+        goal_data['current'] = 0  # Reset daily
+    
+    if action == 'clear':
+        if user_id in goals:
+            del goals[user_id]
+        await ctx.send("🗑️ Goal cleared!")
+        return
+    
+    # Default: Show current goal
+    remaining = max(0, goal_data['target'] - goal_data['current'])
+    embed = discord.Embed(title="🎯 Your Daily Goal", color=0x00ff00)
+    embed.description = f"Target: {format_time(goal_data['target'])}\nCurrent: {format_time(goal_data['current'])}\nRemaining: {format_time(remaining)}"
+    await ctx.send(embed=embed)
+
+@bot.command(name='progress')
+async def progress(ctx):
+    user_id = ctx.author.id
+    today = datetime.date.today()
+    
+    if user_id not in goals:
+        await ctx.send("❌ No goal set! Use !goal set <time> to create one, then !progress.")
+        return
+    
+    goal_data = goals[user_id]
+    if goal_data['date'] != today:
+        goal_data['current'] = 0
+    
+    percentage = min(100, (goal_data['current'] / goal_data['target']) * 100)
+    bar = get_progress_bar(percentage)
+    remaining = max(0, goal_data['target'] - goal_data['current'])
+    eta = format_time(remaining) if remaining > 0 else "Done! 🎉"
+    
+    embed = discord.Embed(title="📈 Goal Progress", color=0x0099ff)
+    embed.add_field(name="Progress", value=f"{bar} {percentage:.0f}%", inline=False)
+    embed.add_field(name="Current / Target", value=f"{format_time(goal_data['current'])} / {format_time(goal_data['target'])}", inline=True)
+    embed.add_field(name="Remaining", value=eta, inline=True)
+    if percentage >= 100:
+        embed.description = "✅ Goal achieved! Great job—set a new one tomorrow?"
+    await ctx.send(embed=embed)
+
+# New: FocusView for Buttons in "focus mode"
+class FocusView(View):
+    def __init__(self):
+        super().__init__(timeout=None)  # Persistent
+
+    @discord.ui.button(label='Enable Focus', style=discord.ButtonStyle.green, emoji='🎯')
+    async def enable_focus(self, interaction: discord.Interaction, button: Button):
+        guild = interaction.guild
+        user = interaction.user
+        
+        # Find or create Focus Mode role
+        focus_role = discord.utils.get(guild.roles, name='Focus Mode')
+        if not focus_role:
+            try:
+                focus_role = await guild.create_role(
+                    name='Focus Mode',
+                    color=discord.Color.green(),
+                    permissions=discord.Permissions.none(),
+                    mentionable=False,
+                    hoist=False
+                )
+                await focus_role.edit(position=1)  # Low hierarchy
+                print(f'Created Focus Mode role: {focus_role.id}')
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ Bot lacks 'Manage Roles' permission.", ephemeral=True)
+                return
+        
+        # Add role if not present
+        if focus_role not in user.roles:
+            await user.add_roles(focus_role)
+            embed_desc = "Distracting channels hidden. Only configured study channels visible.\nUse Disable to exit. VC time tracking active!"
+            if user.voice and user.voice.channel and user.voice.channel.category == focus_category:
+                embed_desc += "\n💡 You're in a Focus room—perfect! Time counting..."
+            try:
+                await user.send("🎯 Entered Focus Mode. Non-study channels now hidden. Stay productive!")
+            except discord.Forbidden:
+                pass
+            await interaction.response.send_message(f"🎯 Focus Mode Enabled!\n{embed_desc}", ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ Focus Mode already enabled!", ephemeral=True)
+
+    @discord.ui.button(label='Disable Focus', style=discord.ButtonStyle.red, emoji='🔓')
+    async def disable_focus(self, interaction: discord.Interaction, button: Button):
+        guild = interaction.guild
+        user = interaction.user
+        
+        focus_role = discord.utils.get(guild.roles, name='Focus Mode')
+        if not focus_role:
+            await interaction.response.send_message("❌ No Focus Mode role found—create it first.", ephemeral=True)
+            return
+        
+        # Remove role if present
+        if focus_role in user.roles:
+            await user.remove_roles(focus_role)
+            try:
+                await user.send("🔓 Exited Focus Mode. Full server access restored.")
+            except discord.Forbidden:
+                pass
+            await interaction.response.send_message("🔓 Focus Mode Disabled! All channels visible again. Keep studying! 📚", ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ Focus Mode already disabled!", ephemeral=True)
+
+# Voice Events (Enhanced for Stats/Goals + Focus Rooms)
+@bot.event
+async def on_voice_state_update(member, before, after):
+    global next_room_num, next_focus_room_num
+    
+    if member == bot.user:
+        return
+    
+    # Track study time (study or focus rooms)
+    is_study_room = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
+    is_focus_room = lambda ch: ch and ch.category == focus_category and ch.name.startswith('Focus Room ')
+    
+    today = datetime.date.today()
+    user_id = member.id
+    
+    # On join to study/focus room: Start timer + init stats
+    if after.channel and (is_study_room(after.channel) or is_focus_room(after.channel)):
+        if user_id not in current_sessions:
+            current_sessions[user_id] = time.time()
+            # Init stats if needed
+            if user_id not in session_history:
+                session_history[user_id] = []
+            if user_id not in sessions_count:
+                sessions_count[user_id] = 0
+            if user_id not in last_session_date:
+                last_session_date[user_id] = today
+            if user_id not in current_streak:
+                current_streak[user_id] = 0
+    
+    # On leave from study/focus room: Add time + update stats/goals
+    if before.channel and (is_study_room(before.channel) or is_focus_room(before.channel)) and user_id in current_sessions:
+        start_time = current_sessions.pop(user_id)
+        session_duration = time.time() - start_time
+        
+        # Update total time
+        if user_id in study_time:
+            study_time[user_id] += session_duration
+        else:
+            study_time[user_id] = session_duration
+        
+        # Stats updates
+        sessions_count[user_id] += 1
+        session_history[user_id].append(session_duration)
+        if len(session_history[user_id]) > 10:
+            session_history[user_id].pop(0)
+        
+        last_session_date[user_id] = today
+        if user_id in current_streak and today == last_session_date.get(user_id, today) - datetime.timedelta(days=1):
+            current_streak[user_id] += 1
+        else:
+            current_streak[user_id] = 1
+        
+        # Update
 
 import os
 bot.run(os.getenv("DISCORD_TOKEN"))
