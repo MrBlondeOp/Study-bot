@@ -290,49 +290,5 @@ class PomodoroView(View):
         if self.uid in pomodoro_sessions:
             await i.response.send_message("Already running!", ephemeral=True)
             return
-        pomodoro_sessions[self.uid] = {'phase': 'work', 'duration': 25*60, 'channel': i.channel, 'message': i.message, 'paused': False, 'pause_time': 0}
-        t = asyncio.create_task(pomodoro_timer(self.uid))
-        pomodoro_sessions[self.uid]['task'] = t
-        b.disabled = True
-        await i.response.edit_message(view=self)
-        await i.followup.send(f"{i.user.mention} 25min work! ⏰")
-
-    @discord.ui.button(label='Pause', style=discord.ButtonStyle.blurple, emoji='⏸️')
-    async def pause(self, i, b):
-        if i.user.id != self.uid:
-            return
-        s = pomodoro_sessions.get(self.uid)
-        if not s or s['paused']:
-            await i.response.send_message("Not running!", ephemeral=True)
-            return
-        s['paused'] = True
-        s['pause_time'] = time.time()
-        b.label = 'Resume'
-        b.emoji = '▶️'
-        await i.response.edit_message(view=self)
-
-    @discord.ui.button(label='Stop', style=discord.ButtonStyle.red, emoji='⏹️')
-    async def stop(self, i, b):
-        if i.user.id != self.uid:
-            return
-        s = pomodoro_sessions.get(self.uid)
-        if s:
-            s['task'].cancel()
-            del pomodoro_sessions[self.uid]
-            b.disabled = True
-            await i.response.edit_message(view=self)
-            await i.followup.send("Stopped!")
-
-async def pomodoro_timer(uid):
-    s = pomodoro_sessions[uid]
-    c = s['channel']
-    while True:
-        ph = s['phase']
-        d = s['duration']
-        et = time.time() + d
-        while time.time() < et:
-            if s['paused']:
-                await asyncio.sleep(1)
-                et += time.time() - s['pause_time']
-                s['pause_time'] = time.time()
+        pomodoro_sessions[self.uid] = {'phase': 'work', 'duration': 25*60, 'channel': i
 bot.run(os.getenv("DISCORD_TOKEN"))
