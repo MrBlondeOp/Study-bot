@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 import asyncio
 import datetime
-import time
 import os
 from discord.ui import Button, View
 
@@ -11,6 +10,7 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# ==================== Data Stores ====================
 study_time = {}
 current_sessions = {}
 rooms = {}
@@ -30,6 +30,7 @@ last_session_date = {}
 goals = {}
 current_streak = {}
 
+# ==================== Utils ====================
 def format_time(s):
     h = int(s // 3600)
     m = int((s % 3600) // 60)
@@ -39,10 +40,12 @@ def get_progress_bar(p, l=10):
     f = int(p / 100 * l)
     return "█" * f + "░" * (l - f)
 
+# ==================== Events ====================
 @bot.event
 async def on_ready():
     global study_category, focus_category, next_room_num, next_focus_room_num
     g = bot.guilds[0]
+
     study_category = discord.utils.get(g.categories, name='Study Rooms')
     if study_category:
         e = [ch for ch in study_category.voice_channels if ch.name.startswith('Study Room ') and ch.name.split()[-1].isdigit()]
@@ -53,33 +56,40 @@ async def on_ready():
             next_room_num = 1
     else:
         print('No Study Rooms category.')
+
     focus_category = discord.utils.get(g.categories, name='Focus')
     if not focus_category:
         try:
             focus_category = await g.create_category('Focus')
         except:
             print('No perms for Focus.')
-    focus_text = discord.utils.get(focus_category.text_channels, name='focus mode') if focus_category else None
+
+    focus_text = discord.utils.get(focus_category.text_channels, name='focus-mode') if focus_category else None
     if not focus_text and focus_category:
         try:
-            focus_text = await focus_category.create_text_channel('focus mode')
+            focus_text = await focus_category.create_text_channel('focus-mode')
         except:
-            print('No perms for focus mode.')
+            print('No perms for focus-mode.')
+
     if focus_text:
         e = discord.Embed(title="Focus Mode", description="Toggle to hide distractions.", color=0x00ff00)
         v = FocusView()
         await focus_text.send(embed=e, view=v)
+
     join_focus = discord.utils.get(focus_category.voice_channels, name=JOIN_FOCUS_CHANNEL_NAME) if focus_category else None
     if not join_focus and focus_category:
         try:
             await focus_category.create_voice_channel(JOIN_FOCUS_CHANNEL_NAME, overwrites={g.default_role: discord.PermissionOverwrite(connect=True)})
         except:
             print('No perms for Join Focused Study.')
+
     join_channel = discord.utils.get(g.voice_channels, name=JOIN_CHANNEL_NAME)
     if not join_channel:
         print('No Join to Create.')
+
     print(f'{bot.user} ready!')
 
+# ==================== Leaderboard / Stats ====================
 @bot.command(name='leaderboard')
 async def leaderboard(ctx):
     if not study_time:
@@ -118,6 +128,7 @@ async def stats(ctx):
     e.add_field(name="Streak", value=f"{st} days", inline=False)
     await ctx.send(embed=e)
 
+# ==================== Goals ====================
 @bot.command(name='goal')
 async def goal(ctx, action=None, *, time_str=None):
     uid = ctx.author.id
@@ -172,6 +183,7 @@ async def progress(ctx):
         e.description = "Achieved!"
     await ctx.send(embed=e)
 
+# ==================== Room Owner Check ====================
 async def is_owner(ctx):
     if not ctx.author.voice:
         await ctx.send("Join room!")
@@ -190,6 +202,7 @@ async def is_owner(ctx):
         return False
     return True
 
+# ==================== Room Commands ====================
 @bot.command(name='trust')
 async def trust(ctx, user: discord.Member):
     if not await is_owner(ctx):
@@ -239,12 +252,56 @@ async def delete_room(ctx):
     await vc.delete()
     await ctx.send("Room deleted!")
 
+# ==================== Pomodoro ====================
 @bot.command(name='pomodoro')
 async def pomodoro(ctx):
     e = discord.Embed(title="Pomodoro", description="25min work + 5min break.", color=0x00ff00)
     v = PomodoroView(ctx.author.id)
     await ctx.send(embed=e, view=v)
 
+class PomodoroView(View):
+    def __init__(self, uid):
+        super().__init__(timeout=None)
+        self.uid = uid
+
+    @discord.ui.button(label='Start', style=discord.ButtonStyle.green, emoji='▶️')
+    async def start(self, i, b):
+        if i.user.id != self.uid:
+            await i.response.send_message("Only starter!", ephemeral=True)
+            return
+        if self.uid in pomodoro_sessions:
+            await i.response.send_message("Already running!", ephemeral=True)
+            return
+        pomodoro_sessions[self.uid] = {'phase': 'work', 'duration': 25*60, 'channel': i.channel}
+        await i.response.send_message("Pomodoro started! Work for 25 minutes.", ephemeral=True)
+        asyncio.create_task(self.run_timer(i))
+
+    async def run_timer(self, i):
+        uid = self.uid
+        while uid in pomodoro_sessions:
+            data = pomodoro_sessions[uid]
+            await asyncio.sleep(data['duration'])
+            if data['phase'] == 'work':
+                data['phase'] = 'break'
+                data['duration'] = 5*60
+                await i.channel.send(f"<@{uid}> Work session over! Take a 5 min break ☕")
+            else:
+                data['phase'] = 'work'
+                data['duration'] = 25*60
+                await i.channel.send(f"<@{uid}> Break over! Back to work 📚")
+
+    @discord.ui.button(label='Stop', style=discord.ButtonStyle.red, emoji='⏹️')
+    async def stop(self, i, b):
+        if i.user.id != self.uid:
+            await i.response.send_message("Only starter!", ephemeral=True)
+            return
+        if self.uid in pomodoro_sessions:
+            del pomodoro_sessions[self.uid]
+            await i.response.send_message("Pomodoro stopped.", ephemeral=True)
+        else:
+            await i.response.send_message("No Pomodoro running.", ephemeral=True)
+
+# ==================== Focus View ====================
 class FocusView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -277,18 +334,9 @@ class FocusView(View):
         else:
             await i.response.send_message("Already disabled!", ephemeral=True)
 
-class PomodoroView(View):
-    def __init__(self, uid):
-        super().__init__(timeout=None)
-        self.uid = uid
-
-    @discord.ui.button(label='Start', style=discord.ButtonStyle.green, emoji='▶️')
-    async def start(self, i, b):
-        if i.user.id != self.uid:
-            await i.response.send_message("Only starter!", ephemeral=True)
-            return
-        if self.uid in pomodoro_sessions:
-            await i.response.send_message("Already running!", ephemeral=True)
-            return
-        pomodoro_sessions[self.uid] = {'phase': 'work', 'duration': 25*60, 'channel': i
-bot.run(os.getenv("DISCORD_TOKEN"))
+# ==================== Run Bot ====================
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("No token found!")
