@@ -172,38 +172,6 @@ async def progress(ctx):
         e.description = "Achieved!"
     await ctx.send(embed=e)
 
-class FocusView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label='Enable', style=discord.ButtonStyle.green, emoji='🎯')
-    async def enable(self, i, b):
-        g = i.guild
-        u = i.user
-        r = discord.utils.get(g.roles, name='Focus Mode')
-        if not r:
-            try:
-                r = await g.create_role(name='Focus Mode', color=0x00ff00, permissions=discord.Permissions.none())
-            except:
-                await i.response.send_message("No perms!", ephemeral=True)
-                return
-        if r not in u.roles:
-            await u.add_roles(r)
-            await i.response.send_message("Enabled!", ephemeral=True)
-        else:
-            await i.response.send_message("Already enabled!", ephemeral=True)
-
-    @discord.ui.button(label='Disable', style=discord.ButtonStyle.red, emoji='🔓')
-    async def disable(self, i, b):
-        g = i.guild
-        u = i.user
-        r = discord.utils.get(g.roles, name='Focus Mode')
-        if r and r in u.roles:
-            await u.remove_roles(r)
-            await i.response.send_message("Disabled!", ephemeral=True)
-        else:
-            await i.response.send_message("Already disabled!", ephemeral=True)
-
 async def is_owner(ctx):
     if not ctx.author.voice:
         await ctx.send("Join room!")
@@ -276,6 +244,37 @@ async def pomodoro(ctx):
     e = discord.Embed(title="Pomodoro", description="25min work + 5min break.", color=0x00ff00)
     v = PomodoroView(ctx.author.id)
     await ctx.send(embed=e, view=v)
+    class FocusView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label='Enable', style=discord.ButtonStyle.green, emoji='🎯')
+    async def enable(self, i, b):
+        g = i.guild
+        u = i.user
+        r = discord.utils.get(g.roles, name='Focus Mode')
+        if not r:
+            try:
+                r = await g.create_role(name='Focus Mode', color=0x00ff00, permissions=discord.Permissions.none())
+            except:
+                await i.response.send_message("No perms!", ephemeral=True)
+                return
+        if r not in u.roles:
+            await u.add_roles(r)
+            await i.response.send_message("Enabled!", ephemeral=True)
+        else:
+            await i.response.send_message("Already enabled!", ephemeral=True)
+
+    @discord.ui.button(label='Disable', style=discord.ButtonStyle.red, emoji='🔓')
+    async def disable(self, i, b):
+        g = i.guild
+        u = i.user
+        r = discord.utils.get(g.roles, name='Focus Mode')
+        if r and r in u.roles:
+            await u.remove_roles(r)
+            await i.response.send_message("Disabled!", ephemeral=True)
+        else:
+            await i.response.send_message("Already disabled!", ephemeral=True)
 
 class PomodoroView(View):
     def __init__(self, uid):
@@ -352,32 +351,5 @@ async def auto_delete(ch_id):
     if ch and len(ch.members) == 0:
         if ch_id in rooms:
             del rooms[ch_id]
-        elif ch_id in focus_rooms:
-            del focus_rooms[ch_id]
-        await ch.delete()
-
-@bot.event
-async def on_voice_state_update(m, before, after):
-    global next_room_num, next_focus_room_num
-    if m == bot.user:
-        return
-    g = m.guild
-    is_study = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
-    is_focus = lambda ch: ch and ch.category == focus_category and ch.name.startswith('Focus Room ')
-    td = datetime.date.today()
-    uid = m.id
-    if after.channel and (is_study(after.channel) or is_focus(after.channel)):
-        if uid not in current_sessions:
-            current_sessions[uid] = time.time()
-            if uid not in session_history:
-                session_history[uid] = []
-            if uid not in sessions_count:
-                sessions_count[uid] = 0
-            if uid not in last_session_date:
-                last_session_date[uid] = td
-            if uid not in current_streak:
-                current_streak[uid] = 0
-    if before.channel and (is_study(before.channel) or is_focus(before.channel)) and uid in current_sessions:
-        st = current_sessions.pop(uid)
-        dur = time
+        elif ch
 bot.run(os.getenv("DISCORD_TOKEN"))
