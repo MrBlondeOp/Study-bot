@@ -303,7 +303,5 @@ async def kick(ctx, user: discord.Member):
     await vc.set_permissions(user, overwrite=None)
     await ctx.send(f"👢 Kicked {user.mention} from {vc.name}.")
 
-@bot
-    
 import os
 bot.run(os.getenv("DISCORD_TOKEN"))
