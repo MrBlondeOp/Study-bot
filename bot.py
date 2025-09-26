@@ -244,7 +244,8 @@ async def pomodoro(ctx):
     e = discord.Embed(title="Pomodoro", description="25min work + 5min break.", color=0x00ff00)
     v = PomodoroView(ctx.author.id)
     await ctx.send(embed=e, view=v)
-    class FocusView(View):
+
+class FocusView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -332,24 +333,5 @@ async def pomodoro_timer(uid):
         while time.time() < et:
             if s['paused']:
                 await asyncio.sleep(1)
-                et += time.time() - s['pause_time']
-                s['pause_time'] = time.time()
-                continue
-            await asyncio.sleep(1)
-        if ph == 'work':
-            await c.send(f"{bot.get_user(uid).mention} Work done! 5min break ☕")
-            s['phase'] = 'break'
-            s['duration'] = 5 * 60
-        else:
-            await c.send(f"{bot.get_user(uid).mention} Break over! 25min work ⏰")
-            s['phase'] = 'work'
-            s['duration'] = 25 * 60
-
-async def auto_delete(ch_id):
-    await asyncio.sleep(300)
-    ch = bot.get_channel(ch_id)
-    if ch and len(ch.members) == 0:
-        if ch_id in rooms:
-            del rooms[ch_id]
-        elif ch
+                et += time.time()
 bot.run(os.getenv("DISCORD_TOKEN"))
