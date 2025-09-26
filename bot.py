@@ -23,7 +23,7 @@ next_room_num = 1
 next_focus_room_num = 1
 JOIN_CHANNEL_NAME = "Join to Create"
 JOIN_FOCUS_CHANNEL_NAME = "Join Focused Study"
-pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'channel': ctx.channel}
+pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'duration': int, 'channel': discord.TextChannel, 'message': discord.Message}
 
 # New: Stats & Goals
 sessions_count = {}  # user_id: total_sessions
@@ -312,21 +312,4 @@ async def is_owner(ctx):
 @bot.command(name='trust')
 async def trust(ctx, user: discord.Member):
     """Owner grants trusted access (overrides lock)."""
-    if not await is_owner(ctx):
-        return
-    vc = ctx.author.voice.channel
-    overwrite = discord.PermissionOverwrite(connect=True, speak=True)
-    await vc.set_permissions(user, overwrite=overwrite)
-    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)! They can now manually join the room.")
-
-@bot.command(name='kick')
-async def kick(ctx, user: discord.Member):
-    if not await is_owner(ctx):
-        return
-    vc = ctx.author.voice.channel
-    await vc.set_permissions(user, overwrite=None)
-    await ctx.send(f"👢 Kicked {user.mention} from {vc.name} (removed access).")
-
-@bot.command(name='lock')
-async def lock(ctx):
-    if not await is_owner
+    if not await is_owner(ctx
