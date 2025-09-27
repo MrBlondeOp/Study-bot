@@ -324,4 +324,16 @@ async def unlock(ctx):
     await ctx.send(f"🔓 {vc.name} is now unlocked (everyone can join)!")
 
 @bot.command(name='delete')
-async def delete_room(ctx
+async def delete_room(ctx):
+    """Owner deletes their study room manually."""
+    if not await is_owner(ctx):
+        return
+    vc = ctx.author.voice.channel
+    try:
+        await vc.delete()
+        if vc.id in rooms:
+            del rooms[vc.id]
+        await ctx.send(f"🗑️ {vc.name} has been deleted!")
+    except discord.Forbidden:
+        await ctx.send("❌ I don’t have permission to delete this room.")
+
