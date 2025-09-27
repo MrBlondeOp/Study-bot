@@ -337,4 +337,5 @@ async def delete_room(ctx):
     except discord.Forbidden:
         await ctx.send("❌ I don’t have permission to delete this room.")
 
-os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN")  # Railway Variables me add karna hoga
+bot.run(TOKEN)
