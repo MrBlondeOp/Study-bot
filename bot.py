@@ -106,13 +106,19 @@ async def stats(ctx):
     history = session_history.get(user_id, [])
     avg_session = sum(history) / max(len(history), 1) if history else 0
     
-    # Streak calculation
+    # Streak calculation (refined: check if last session was yesterday)
     streak = current_streak.get(user_id, 0)
-    last_date = last_session_date.get(user_id, today - datetime.timedelta(days=1))
-    if last_date.date() == today - datetime.timedelta(days=1):
-        streak += 1
-    elif last_date.date() != today:
-        streak = 1
+    last_date = last_session_date.get(user_id)
+    if last_date:
+        days_diff = (today - last_date).days
+        if days_diff == 0:  # Today
+            pass  # Streak unchanged
+        elif days_diff == 1:  # Yesterday
+            streak += 1
+        else:  # Gap >1 day
+            streak = 1
+    else:
+        streak = 1  # First session
     current_streak[user_id] = streak
     
     embed = discord.Embed(title=f"📊 {ctx.author.display_name}'s Study Stats", color=0x0099ff)
@@ -134,7 +140,7 @@ async def on_voice_state_update(member, before, after):
     # Track study time (only in study rooms)
     is_study_room = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
     
-    # On join to study room: Start timer
+    # On join to study room: Start timer, init stats if new
     if after.channel and is_study_room(after.channel) and member.id not in current_sessions:
         current_sessions[member.id] = time.time()
         if member.id not in session_history:
@@ -142,7 +148,7 @@ async def on_voice_state_update(member, before, after):
         if member.id not in sessions_count:
             sessions_count[member.id] = 0
         if member.id not in last_session_date:
-            last_session_date[member.id] = datetime.date.today()
+            last_session_date[member.id] = today  # Will be updated on leave
         if member.id not in current_streak:
             current_streak[member.id] = 0
     
@@ -163,14 +169,6 @@ async def on_voice_state_update(member, before, after):
         
         today = datetime.date.today()
         last_session_date[member.id] = today
-        
-        # Streak update
-        if member.id in current_streak:
-            prev_date = last_session_date.get(member.id, today) - datetime.timedelta(days=1)
-            if today == prev_date:
-                current_streak[member.id] += 1
-            else:
-                current_streak[member.id] = 1
     
     # Auto-create on join to "Join to Create"
     if after.channel and after.channel.name == JOIN_CHANNEL_NAME and (before.channel is None or before.channel != after.channel):
@@ -216,8 +214,8 @@ async def on_voice_state_update(member, before, after):
             except discord.Forbidden:
                 pass
     
-    # Auto-delete empty rooms
-    if before.channel and before.channel.category == study_category and len(before.channel.members) == 0:
+    # Auto-delete empty rooms (after leave)
+    if before.channel and is_study_room(before.channel) and len(before.channel.members) == 0:
         try:
             await before.channel.delete()
             if before.channel.id in rooms:
@@ -327,10 +325,3 @@ async def unlock(ctx):
 
 @bot.command(name='delete')
 async def delete_room(ctx):
-    if not await is_owner(ctx):
-        return
-    vc = ctx.author.voice.channel
-    owner_id = rooms[vc.id]
-    await vc.delete()
-    if vc.id in rooms:
-
