@@ -333,6 +333,4 @@ async def delete_room(ctx):
     owner_id = rooms[vc.id]
     await vc.delete()
     if vc.id in rooms:
-       
-  #Runs the bot 
-bot.run(os.getenv("DISCORD_TOKEN"))
+
