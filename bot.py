@@ -380,17 +380,6 @@ class PomodoroView(View):
         self.current_task = asyncio.create_task(self.run_pomodoro_cycle())
 
     @discord.ui.button(label='Pause', style=discord.ButtonStyle.blurple, emoji='⏸️')
-    async def pause_callback(self, interaction: discord.Interaction, button: Button):
-        if interaction.user != self.user or not self.is_running:
-            await interaction.response.send_message("❌ Not running or not yours!", ephemeral=True)
-            return
-        if self.current_task:
-            self.current_task.cancel()
-            self.is_running = False
-            self.children[0].disabled = False  # Re-enable start
-        await interaction.response.send_message("⏸️ Pomodoro paused. Click Start to resume.", ephemeral=True)
-        await interaction.edit_original_response(view=self)
-
-    @discord.ui.button(label='Stop', style=discord.ButtonStyle.red, emoji='⏹️
+    async def pause
         
 bot.run(os.getenv("DISCORD_TOKEN"))
