@@ -109,10 +109,10 @@ async def stats(ctx):
     # Streak calculation
     streak = current_streak.get(user_id, 0)
     last_date = last_session_date.get(user_id, today - datetime.timedelta(days=1))
-    if last_date == today - datetime.timedelta(days=1):
+    if last_date.date() == today - datetime.timedelta(days=1):
         streak += 1
-    else:
-        streak = 1 if last_date == today else streak
+    elif last_date.date() != today:
+        streak = 1
     current_streak[user_id] = streak
     
     embed = discord.Embed(title=f"📊 {ctx.author.display_name}'s Study Stats", color=0x0099ff)
@@ -166,7 +166,8 @@ async def on_voice_state_update(member, before, after):
         
         # Streak update
         if member.id in current_streak:
-            if today == last_session_date.get(member.id, today) - datetime.timedelta(days=1):
+            prev_date = last_session_date.get(member.id, today) - datetime.timedelta(days=1)
+            if today == prev_date:
                 current_streak[member.id] += 1
             else:
                 current_streak[member.id] = 1
@@ -332,54 +333,6 @@ async def delete_room(ctx):
     owner_id = rooms[vc.id]
     await vc.delete()
     if vc.id in rooms:
-        del rooms[vc.id]
-    try:
-        owner = ctx.guild.get_member(owner_id)
-        await owner.send(f"🗑️ Deleted {vc.name}. Thanks for studying!")
-    except:
-        pass
-
-# Improved Pomodoro with Buttons
-@bot.command(name='pomodoro')
-async def pomodoro(ctx):
-    """Start an interactive Pomodoro session with buttons."""
-    user_id = ctx.author.id
-    if user_id in pomodoro_sessions:
-        await ctx.send("❌ You already have an active Pomodoro! Use the buttons to control it.")
-        return
-    
-    embed = discord.Embed(
-        title="⏱️ Pomodoro Timer",
-        description=f"{ctx.author.mention}, ready to focus? Click **Start** for a 25-min work session + 5-min break.\nYour VC time tracks automatically! (Pairs great with Focus Mode)",
-        color=0x0099ff
-    )
-    view = PomodoroView(ctx.author, ctx.channel)
-    await ctx.send(embed=embed, view=view)
-
-class PomodoroView(View):
-    def __init__(self, user: discord.Member, channel: discord.TextChannel):
-        super().__init__(timeout=None)  # Persistent until stopped
-        self.user = user
-        self.channel = channel
-        self.is_running = False
-        self.current_task = None
-
-    @discord.ui.button(label='Start', style=discord.ButtonStyle.green, emoji='▶️')
-    async def start_callback(self, interaction: discord.Interaction, button: Button):
-        if interaction.user != self.user:
-            await interaction.response.send_message("❌ Only the session owner can control this!", ephemeral=True)
-            return
-        if self.is_running:
-            await interaction.response.send_message("❌ Already running! Use Pause/Stop.", ephemeral=True)
-            return
-        
-        self.is_running = True
-        button.disabled = True  # Disable start button
-        await interaction.response.edit_message(view=self)
-        await interaction.followup.send("🚀 Starting 25-min work session! Focus up! 📚")
-        self.current_task = asyncio.create_task(self.run_pomodoro_cycle())
-
-    @discord.ui.button(label='Pause', style=discord.ButtonStyle.blurple, emoji='⏸️')
-    async def pause
+       
         
 bot.run(os.getenv("DISCORD_TOKEN"))
