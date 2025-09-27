@@ -324,4 +324,4 @@ async def unlock(ctx):
     await ctx.send(f"🔓 {vc.name} is now unlocked (everyone can join)!")
 
 @bot.command(name='delete')
-async def delete_room(ctx):
+async def delete_room(ctx)
