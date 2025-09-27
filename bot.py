@@ -33,46 +33,96 @@ def format_time(seconds):
     minutes = int((seconds % 3600) // 60)
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
+# Focus Mode View (Buttons for Enable/Disable)
+class FocusView(View):
+    def __init__(self):
+        super().__init__(timeout=None)  # Persistent
+
+    @discord.ui.button(label='Enable Focus', style=discord.ButtonStyle.green, emoji='🎯')
+    async def enable_focus(self, interaction: discord.Interaction, button: Button):
+        guild = interaction.guild
+        user = interaction.user
+        
+        focus_role = discord.utils.get(guild.roles, name='Focus Mode')
+        if not focus_role:
+            try:
+                focus_role = await guild.create_role(
+                    name='Focus Mode',
+                    color=discord.Color.green(),
+                    permissions=discord.Permissions.none(),
+                    mentionable=False,
+                    hoist=False
+                )
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ Bot lacks 'Manage Roles' permission!", ephemeral=True)
+                return
+        
+        if focus_role not in user.roles:
+            await user.add_roles(focus_role)
+            embed = discord.Embed(
+                title="🎯 Focus Mode Enabled",
+                description="Distracting channels hidden. Only study channels visible. Use Disable to exit.",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ Already in Focus Mode!", ephemeral=True)
+
+    @discord.ui.button(label='Disable Focus', style=discord.ButtonStyle.red, emoji='🔓')
+    async def disable_focus(self, interaction: discord.Interaction, button: Button):
+        guild = interaction.guild
+        user = interaction.user
+        
+        focus_role = discord.utils.get(guild.roles, name='Focus Mode')
+        if focus_role and focus_role in user.roles:
+            await user.remove_roles(focus_role)
+            embed = discord.Embed(
+                title="🔓 Focus Mode Disabled",
+                description="All channels visible again. Keep studying!",
+                color=0xff9900
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message("✅ Not in Focus Mode!", ephemeral=True)
+
 @bot.event
 async def on_ready():
     global study_category, next_room_num
     guild = bot.guilds[0]
-    
+
+    # Study Rooms setup
     study_category = discord.utils.get(guild.categories, name='Study Rooms')
     if study_category:
         existing_rooms = [ch for ch in study_category.voice_channels if ch.name.startswith('Study Room ') and ch.name.split()[-1].isdigit()]
         if existing_rooms:
             nums = [int(ch.name.split()[-1]) for ch in existing_rooms]
             next_room_num = max(nums) + 1
-            print(f'Next room number: {next_room_num}')
         else:
             next_room_num = 1
-            print('Starting from room 1.')
     else:
         print('❌ No "Study Rooms" category found!')
-    
-    join_channel = discord.utils.get(guild.voice_channels, name=JOIN_CHANNEL_NAME)
-    if not join_channel:
-        print(f'❌ No "{JOIN_CHANNEL_NAME}" channel found!')
-    
-    # Set bot status
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="StudySphere"))
-    
-    # Focus Mode Embed in "focus mode" channel
-    focus_channel = discord.utils.get(guild.text_channels, name='focus mode')
+
+    # Focus Mode Embed
+    focus_channel = discord.utils.get(guild.text_channels, name='focus-mode')
     if focus_channel:
         embed = discord.Embed(
             title="🎯 Focus Mode",
-            description="Toggle to hide distractions and focus on studying. Only study channels visible when enabled.",
+            description=(
+                "Toggle Focus Mode to hide distractions and focus on studying.\n\n"
+                "✅ **Enable Focus** → Hides all channels except study-related ones.\n"
+                "❌ **Disable Focus** → Shows all channels again."
+            ),
             color=0x00ff00
         )
         view = FocusView()
+        await focus_channel.purge(limit=5)  # Clean old bot messages (optional)
         await focus_channel.send(embed=embed, view=view)
-        print('Focus Mode embed sent to "focus mode" channel.')
+        print('📌 Focus Mode embed sent to #focus-mode channel.')
     else:
-        print('❌ No "focus mode" text channel found – create it for Focus Mode buttons.')
-    
-    print(f'{bot.user} has logged in! Ready for StudySphere. Voice events active.')
+        print('❌ No #focus-mode text channel found – please create one.')
+
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="StudySphere"))
+    print(f"{bot.user} is online and ready!")
 
 # Leaderboard (Time-Based)
 @bot.command(name='leaderboard')
@@ -106,19 +156,18 @@ async def stats(ctx):
     history = session_history.get(user_id, [])
     avg_session = sum(history) / max(len(history), 1) if history else 0
     
-    # Streak calculation (refined: check if last session was yesterday)
     streak = current_streak.get(user_id, 0)
     last_date = last_session_date.get(user_id)
     if last_date:
         days_diff = (today - last_date).days
-        if days_diff == 0:  # Today
-            pass  # Streak unchanged
-        elif days_diff == 1:  # Yesterday
+        if days_diff == 0:
+            pass
+        elif days_diff == 1:
             streak += 1
-        else:  # Gap >1 day
+        else:
             streak = 1
     else:
-        streak = 1  # First session
+        streak = 1
     current_streak[user_id] = streak
     
     embed = discord.Embed(title=f"📊 {ctx.author.display_name}'s Study Stats", color=0x0099ff)
@@ -137,10 +186,8 @@ async def on_voice_state_update(member, before, after):
     if member == bot.user:
         return
     
-    # Track study time (only in study rooms)
     is_study_room = lambda ch: ch and ch.category == study_category and ch.name.startswith('Study Room ')
     
-    # On join to study room: Start timer, init stats if new
     if after.channel and is_study_room(after.channel) and member.id not in current_sessions:
         current_sessions[member.id] = time.time()
         if member.id not in session_history:
@@ -148,11 +195,10 @@ async def on_voice_state_update(member, before, after):
         if member.id not in sessions_count:
             sessions_count[member.id] = 0
         if member.id not in last_session_date:
-            last_session_date[member.id] = today  # Will be updated on leave
+            last_session_date[member.id] = datetime.date.today()
         if member.id not in current_streak:
             current_streak[member.id] = 0
     
-    # On leave from study room: Add time to total, update stats
     if before.channel and is_study_room(before.channel) and member.id in current_sessions:
         start_time = current_sessions.pop(member.id)
         session_time = time.time() - start_time
@@ -161,16 +207,14 @@ async def on_voice_state_update(member, before, after):
         else:
             study_time[member.id] = session_time
         
-        # Update sessions and history
         sessions_count[member.id] += 1
         session_history[member.id].append(session_time)
-        if len(session_history[member.id]) > 10:  # Keep last 10
+        if len(session_history[member.id]) > 10:
             session_history[member.id].pop(0)
         
         today = datetime.date.today()
         last_session_date[member.id] = today
     
-    # Auto-create on join to "Join to Create"
     if after.channel and after.channel.name == JOIN_CHANNEL_NAME and (before.channel is None or before.channel != after.channel):
         guild = member.guild
         if not study_category:
@@ -181,7 +225,6 @@ async def on_voice_state_update(member, before, after):
             return
         
         channel_name = f"Study Room {next_room_num}"
-        # Default UNLOCKED
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(connect=True, speak=True),
             member: discord.PermissionOverwrite(connect=True, speak=True, manage_channels=True)
@@ -200,7 +243,7 @@ async def on_voice_state_update(member, before, after):
                       f"• !kick @user - Remove access\n"
                       f"• !unlock - Open to everyone\n"
                       f"• !delete - Close the room\n"
-                      f"Time in rooms counts toward leaderboard. Use !pomodoro for focused sessions or Focus Mode buttons for mode. 📚")
+                      f"Time in rooms counts toward leaderboard. 📚")
             try:
                 await member.send(dm_msg)
             except discord.Forbidden:
@@ -214,7 +257,6 @@ async def on_voice_state_update(member, before, after):
             except discord.Forbidden:
                 pass
     
-    # Auto-delete empty rooms (after leave)
     if before.channel and is_study_room(before.channel) and len(before.channel.members) == 0:
         try:
             await before.channel.delete()
@@ -222,54 +264,6 @@ async def on_voice_state_update(member, before, after):
                 del rooms[before.channel.id]
         except discord.Forbidden:
             pass
-
-# Focus Mode View (Buttons for Enable/Disable)
-class FocusView(View):
-    def __init__(self):
-        super().__init__(timeout=None)  # Persistent
-
-    @discord.ui.button(label='Enable Focus', style=discord.ButtonStyle.green, emoji='🎯')
-    async def enable_focus(self, interaction: discord.Interaction, button: Button):
-        guild = interaction.guild
-        user = interaction.user
-        
-        # Find or create Focus Mode role
-        focus_role = discord.utils.get(guild.roles, name='Focus Mode')
-        if not focus_role:
-            try:
-                focus_role = await guild.create_role(
-                    name='Focus Mode',
-                    color=discord.Color.green(),
-                    permissions=discord.Permissions.none(),
-                    mentionable=False,
-                    hoist=False
-                )
-                await focus_role.edit(position=1)  # Low in hierarchy
-                print(f'Created Focus Mode role: {focus_role.id}')
-            except discord.Forbidden:
-                await interaction.response.send_message("❌ Bot lacks 'Manage Roles' permission!", ephemeral=True)
-                return
-        
-        # Add role if not present
-        if focus_role not in user.roles:
-            await user.add_roles(focus_role)
-            embed = discord.Embed(title="🎯 Focus Mode Enabled", description="Distracting channels hidden. Only study channels visible. Use Disable to exit.", color=0x00ff00)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            await interaction.response.send_message("✅ Already in Focus Mode!", ephemeral=True)
-
-    @discord.ui.button(label='Disable Focus', style=discord.ButtonStyle.red, emoji='🔓')
-    async def disable_focus(self, interaction: discord.Interaction, button: Button):
-        guild = interaction.guild
-        user = interaction.user
-        
-        focus_role = discord.utils.get(guild.roles, name='Focus Mode')
-        if focus_role and focus_role in user.roles:
-            await user.remove_roles(focus_role)
-            embed = discord.Embed(title="🔓 Focus Mode Disabled", description="All channels visible again. Keep studying!", color=0xff9900)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            await interaction.response.send_message("✅ Not in Focus Mode!", ephemeral=True)
 
 # Owner Commands
 async def is_owner(ctx):
@@ -287,13 +281,12 @@ async def is_owner(ctx):
 
 @bot.command(name='trust')
 async def trust(ctx, user: discord.Member):
-    """Owner grants trusted access (overrides lock)."""
     if not await is_owner(ctx):
         return
     vc = ctx.author.voice.channel
     overwrite = discord.PermissionOverwrite(connect=True, speak=True)
     await vc.set_permissions(user, overwrite=overwrite)
-    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)! They can now manually join the room.")
+    await ctx.send(f"✅ Trusted {user.mention} for {vc.name} (can join even if locked)!")
 
 @bot.command(name='kick')
 async def kick(ctx, user: discord.Member):
@@ -325,7 +318,6 @@ async def unlock(ctx):
 
 @bot.command(name='delete')
 async def delete_room(ctx):
-    """Owner deletes their study room manually."""
     if not await is_owner(ctx):
         return
     vc = ctx.author.voice.channel
@@ -336,6 +328,7 @@ async def delete_room(ctx):
         await ctx.send(f"🗑️ {vc.name} has been deleted!")
     except discord.Forbidden:
         await ctx.send("❌ I don’t have permission to delete this room.")
+
 
 TOKEN = os.getenv("DISCORD_TOKEN")  # Railway Variables me add karna hoga
 bot.run(TOKEN)
