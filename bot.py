@@ -6,11 +6,11 @@ import datetime
 import time
 from discord.ui import Button, View
 
-# Bot setup
+# Bot setup with '.' prefix
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='.', intents=intents)
 
 # Storage
 study_time = {}  # user_id: total_seconds
@@ -18,16 +18,17 @@ current_sessions = {}  # user_id: start_time (for VC time)
 rooms = {}  # channel_id: owner_id
 study_category = None
 next_room_num = 1
-JOIN_CHANNEL_NAME = "Join to Create"
-pomodoro_sessions = {}  # user_id: {'task': asyncio.Task, 'phase': 'work' or 'break', 'channel': ctx.channel}
-active_pomodoros = {}  # {user_id: asyncio.Task}
 
+# Pomodoro sessions storage: user_id -> {'task': asyncio.Task, 'phase': 'work'/'break', 'paused': bool, 'remaining': seconds, 'start_time': float}
+pomodoro_sessions = {}
 
 # Stats storage
 sessions_count = {}  # user_id: total_sessions
 session_history = {}  # user_id: list of session durations (last 10)
 last_session_date = {}  # user_id: last date
 current_streak = {}  # user_id: current streak days
+
+JOIN_CHANNEL_NAME = "Join to Create"
 
 def format_time(seconds):
     """Convert seconds to HH:MM format."""
@@ -87,73 +88,116 @@ class FocusView(View):
         else:
             await interaction.response.send_message("✅ Not in Focus Mode!", ephemeral=True)
 
+# Pomodoro View with buttons
+class PomodoroView(View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.green, emoji="▶️")
+    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ This is not your Pomodoro session.", ephemeral=True)
+            return
+
+        session = pomodoro_sessions.get(self.user_id)
+        if session and not session['paused']:
+            await interaction.response.send_message("✅ Pomodoro already running.", ephemeral=True)
+            return
+
+        if session and session['paused']:
+            # Resume timer
+            session['paused'] = False
+            session['start_time'] = time.time()
+            session['task'] = bot.loop.create_task(run_pomodoro(interaction, self.user_id))
+            await interaction.response.send_message("▶️ Pomodoro resumed!", ephemeral=True)
+        else:
+            # Start new Pomodoro
+            pomodoro_sessions[self.user_id] = {
+                'phase': 'work',
+                'paused': False,
+                'remaining': 25 * 60,
+                'start_time': time.time(),
+                'task': bot.loop.create_task(run_pomodoro(interaction, self.user_id))
+            }
+            await interaction.response.send_message("🎯 Pomodoro started! Work for 25 minutes.", ephemeral=True)
+
+    @discord.ui.button(label="Pause", style=discord.ButtonStyle.grey, emoji="⏸️")
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ This is not your Pomodoro session.", ephemeral=True)
+            return
+
+        session = pomodoro_sessions.get(self.user_id)
+        if not session or session['paused']:
+            await interaction.response.send_message("❌ Pomodoro is not running.", ephemeral=True)
+            return
+
+        # Pause timer
+        session['paused'] = True
+        elapsed = time.time() - session['start_time']
+        session['remaining'] -= elapsed
+        if session['task']:
+            session['task'].cancel()
+        await interaction.response.send_message("⏸️ Pomodoro paused.", ephemeral=True)
+
+    @discord.ui.button(label="Stop", style=discord.ButtonStyle.red, emoji="⏹️")
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ This is not your Pomodoro session.", ephemeral=True)
+            return
+
+        session = pomodoro_sessions.pop(self.user_id, None)
+        if session and session['task']:
+            session['task'].cancel()
+        await interaction.response.send_message("🛑 Pomodoro stopped and reset.", ephemeral=True)
+
+async def run_pomodoro(interaction: discord.Interaction, user_id: int):
+    session = pomodoro_sessions.get(user_id)
+    if not session:
+        return
+
+    try:
+        while True:
+            phase = session['phase']
+            duration = session['remaining']
+            session['start_time'] = time.time()
+
+            # Wait for the remaining time or until cancelled
+            await asyncio.sleep(duration)
+
+            # Switch phase
+            if phase == 'work':
+                session['phase'] = 'break'
+                session['remaining'] = 5 * 60
+                await interaction.followup.send(f"⏰ Work session complete! Time for a 5-minute break, <@{user_id}>.", ephemeral=True)
+            else:
+                session['phase'] = 'work'
+                session['remaining'] = 25 * 60
+                await interaction.followup.send(f"⏰ Break over! Back to work for 25 minutes, <@{user_id}>.", ephemeral=True)
+
+    except asyncio.CancelledError:
+        # Timer was paused or stopped
+        pass
+
+@bot.command(name='pomodoro')
+async def pomodoro_cmd(ctx):
+    """Start a Pomodoro timer with control buttons."""
+    view = PomodoroView(ctx.author.id)
+    embed = discord.Embed(
+        title="🍅 Pomodoro Timer",
+        description=(
+            "Use the buttons below to start, pause, or stop your Pomodoro timer.\n"
+            "Work: 25 minutes\nBreak: 5 minutes"
+        ),
+        color=0xff4500
+    )
+    await ctx.send(embed=embed, view=view)
+
 @bot.event
 async def on_ready():
     global study_category, next_room_num
     guild = bot.guilds[0]
-
-    # -------------------------
-# Pomodoro View (Buttons)
-# -------------------------
-class PomodoroView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="▶️ Start Pomodoro", style=discord.ButtonStyle.green)
-    async def start_button(self, interaction: discord.Interaction, button: Button):
-        user_id = interaction.user.id
-        if user_id in active_pomodoros:
-            await interaction.response.send_message("❌ You already have a Pomodoro running! Stop it first.", ephemeral=True)
-            return
-
-        await interaction.response.send_message("🍅 Pomodoro started! Focus for 25 minutes.", ephemeral=True)
-
-        async def run_pomodoro():
-            focus, short_break, cycles = 25, 5, 4
-            for cycle in range(1, cycles + 1):
-                embed = discord.Embed(
-                    title="🍅 Focus Time",
-                    description=f"**Cycle {cycle}/{cycles}**\nFocus for `{focus}` minutes.",
-                    color=discord.Color.red()
-                )
-                embed.set_footer(text=f"Started at {datetime.datetime.now().strftime('%H:%M:%S')}")
-                await interaction.channel.send(f"{interaction.user.mention}", embed=embed)
-
-                await asyncio.sleep(focus * 60)
-
-                if cycle != cycles:
-                    embed = discord.Embed(
-                        title="☕ Break Time!",
-                        description=f"Relax for `{short_break}` minutes.",
-                        color=discord.Color.green()
-                    )
-                    await interaction.channel.send(f"{interaction.user.mention}", embed=embed)
-                    await asyncio.sleep(short_break * 60)
-
-            await interaction.channel.send(f"✅ {interaction.user.mention} All Pomodoro cycles complete! 🎉")
-            del active_pomodoros[user_id]
-
-        task = asyncio.create_task(run_pomodoro())
-        active_pomodoros[user_id] = task
-
-    @discord.ui.button(label="⏹️ Stop Pomodoro", style=discord.ButtonStyle.red)
-    async def stop_button(self, interaction: discord.Interaction, button: Button):
-        user_id = interaction.user.id
-        if user_id not in active_pomodoros:
-            await interaction.response.send_message("❌ You don’t have any active Pomodoro.", ephemeral=True)
-        else:
-            active_pomodoros[user_id].cancel()
-            del active_pomodoros[user_id]
-            await interaction.response.send_message("⏹️ Pomodoro stopped.", ephemeral=True)
-
-    @discord.ui.button(label="ℹ️ Status", style=discord.ButtonStyle.blurple)
-    async def status_button(self, interaction: discord.Interaction, button: Button):
-        user_id = interaction.user.id
-        if user_id not in active_pomodoros:
-            await interaction.response.send_message("❌ No active Pomodoro.", ephemeral=True)
-        else:
-            await interaction.response.send_message("ℹ️ Your Pomodoro is currently running. Stay focused! 🎯", ephemeral=True)
-
 
     # Study Rooms setup
     study_category = discord.utils.get(guild.categories, name='Study Rooms')
@@ -200,7 +244,7 @@ async def leaderboard_cmd(ctx):
     embed = discord.Embed(title='🏆 StudySphere Leaderboard (Time)', color=0x00ff00)
     for i, (user_id, secs) in enumerate(sorted_users, 1):
         user = bot.get_user(user_id)
-        username = user.display_name if user else f'User {user_id}'
+        username = user.display_name if user else f'User  {user_id}'
         time_str = format_time(secs)
         embed.add_field(name=f'{i}. {username}', value=time_str, inline=False)
     embed.timestamp = datetime.datetime.now()
@@ -303,11 +347,11 @@ async def on_voice_state_update(member, before, after):
             await member.move_to(new_vc)
             
             dm_msg = (f"🔊 Created and moved you to your unlocked {channel_name}! Anyone can join by default.\n"
-                      f"• !lock - Lock to trusted only\n"
-                      f"• !trust @user - Grant access even if locked\n"
-                      f"• !kick @user - Remove access\n"
-                      f"• !unlock - Open to everyone\n"
-                      f"• !delete - Close the room\n"
+                      f"• .lock - Lock to trusted only\n"
+                      f"• .trust @user - Grant access even if locked\n"
+                      f"• .kick @user - Remove access\n"
+                      f"• .unlock - Open to everyone\n"
+                      f"• .delete - Close the room\n"
                       f"Time in rooms counts toward leaderboard. 📚")
             try:
                 await member.send(dm_msg)
@@ -316,7 +360,7 @@ async def on_voice_state_update(member, before, after):
                 
         except discord.Forbidden:
             fallback_msg = (f"🔊 Created your unlocked {channel_name}! Manually join it (permission issue).\n"
-                            f"Commands: !trust @user, !lock, etc. Time tracks automatically. 📚")
+                            f"Commands: .trust @user, .lock, etc. Time tracks automatically. 📚")
             try:
                 await member.send(fallback_msg)
             except discord.Forbidden:
@@ -369,7 +413,7 @@ async def lock(ctx):
     role = ctx.guild.default_role
     overwrite = discord.PermissionOverwrite(connect=False, speak=False)
     await vc.set_permissions(role, overwrite=overwrite)
-    await ctx.send(f"🔒 {vc.name} is now locked (@everyone denied; use !trust @user to allow access)!")
+    await ctx.send(f"🔒 {vc.name} is now locked (@everyone denied; use .trust @user to allow access)!")
 
 @bot.command(name='unlock')
 async def unlock(ctx):
@@ -393,20 +437,6 @@ async def delete_room(ctx):
         await ctx.send(f"🗑️ {vc.name} has been deleted!")
     except discord.Forbidden:
         await ctx.send("❌ I don’t have permission to delete this room.")
-        @bot.command()
-async def pomodoro(ctx):
-    embed = discord.Embed(
-        title="🍅 Pomodoro Timer",
-        description=(
-            "Stay productive using the Pomodoro technique!\n\n"
-            "▶️ **Start Pomodoro** – 25 min focus + 5 min break × 4 cycles\n"
-            "⏹️ **Stop Pomodoro** – Cancel your session\n"
-            "ℹ️ **Status** – Check your progress"
-        ),
-        color=discord.Color.orange()
-    )
-    await ctx.send(embed=embed, view=PomodoroView())
-
 
 
 bot.run(TOKEN)
