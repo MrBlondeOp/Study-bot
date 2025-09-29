@@ -439,4 +439,4 @@ async def delete_room(ctx):
         await ctx.send("❌ I don’t have permission to delete this room.")
 
 
-bot.run(TOKEN)
+bot.run(DISCORD_TOKEN)
