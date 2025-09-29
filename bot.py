@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord.ui import View, Button
 import asyncio
 import datetime
+import os
 
 intents = discord.Intents.default()
 intents.members = True
